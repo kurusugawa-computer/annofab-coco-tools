@@ -1,0 +1,2 @@
+# annofab-coco-tools
+Annofab形式のアノテーションとCOCOデータセット形式のアノテーションを相互に変換するツール群
