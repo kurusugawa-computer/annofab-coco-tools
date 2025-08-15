@@ -1,0 +1,113 @@
+[project]
+name = "annofab-coco-tools"
+version = "0.1.0"
+description = "Annofab形式のアノテーションとCOCOデータセット形式のアノテーションを相互に変換するツール群"
+requires-python = ">=3.12"
+dependencies = [
+    "annofabapi>=1.4.8",
+    "annofabcli>=1.104.1",
+    "jsonargparse>=4.40.2",
+    "loguru>=0.7.3",
+    "pydantic>=2.11.7",
+]
+
+[dependency-groups]
+test = [
+  "pytest>=8"
+]
+lint = [
+    "ruff",
+    "mypy",
+    "types-pytz",
+    "types-requests",
+    "types-python-dateutil",
+    "types-PyYAML"
+]
+
+dev = [
+    "ipython",
+    "pyarrow"
+]
+
+[tool.uv]
+default-groups = "all"
+
+
+[tool.mypy]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+show_column_numbers = true
+
+
+[tool.ruff]
+target-version = "py312"
+line-length = 200
+
+[tool.ruff.lint]
+ignore = [
+    "G004", # `logging-f-string` : loggingでf-stringを使いたいので無視する
+    # "PD002", #すでにpandasで`inplace=True`はいろんなところで使っているため
+    "RUF001", # 全角記号など`ambiguous unicode character`も使いたいため
+    "RUF002",# 全角記号など`ambiguous unicode character`も使いたいため
+    "RUF003",# 全角記号など`ambiguous unicode character`も使いたいため
+    "PLC1901", # compare-to-empty-string : `if a == "`のように空文字列で直接比較したいときがあるため
+    "PLR2004", # magic-value-comparison: listのサイズで判定するときがよくあるため
+    # "ANN002", # missing-type-args
+    # "ANN003", # missing-type-kwargs
+    "ERA", # : 役立つこともあるが、コメントアウトしていないコードも警告されるので無視する
+    # "PD901",
+    # "PLC2401", # 日本語も変数名やメソッド名に使うため
+
+
+    # 以下のルールはannofabcliのコードに合っていないので無効化した
+    "RSE", # flake8-raise
+    "D", # pydocstyle, Docstringを中途半端にしか書いていないので、除外する
+    "C90", # mccabe
+    # "T20", # flake8-print
+    "SLF", #  flake8-self
+    # "BLE", # flake8-blind-except
+    # "FBT", # flake8-boolean-trap
+    "TRY", # tryceratops
+    "COM", # flake8-commas
+    "S", # flake8-bandit
+    "EM",#flake8-errmsg
+    "EXE", # flake8-executable
+    "ICN", # flake8-import-conventions
+    "RET",#flake8-return
+    "SIM",#flake8-simplify
+    "TCH", # flake8-type-checking
+    "PTH", #pathlibを使わないコードが多いので、除外する
+    "ISC", #flake8-implicit-str-concat
+    # "N", # pep8-naming
+    # "PT", # flake8-pytest-style
+]
+
+select = [
+    "ALL"
+]
+
+[tool.ruff.lint.per-file-ignores]
+# テストコードはチェックを緩和する
+"tests/**.py" = [
+    "PGH",  # pygrep-hooks
+    "DTZ",  # flake8-datetimez
+    "ANN",  # flake8-annotations
+    "E501",  # line-too-long
+    "RUF100",  # unused-noqa
+    "SIM", # flake8-simplify
+    "N", # pep8-naming
+    "PTH", # flake8-use-pathlib
+    "SLF", # flake8-self
+    "PLC2401", # non-ascii-name: メソッド名に日本語を使うため
+]
+
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 10
+
