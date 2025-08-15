@@ -9,4 +9,3 @@ def create_parent_parser() -> jsonargparse.ArgumentParser:
     parent_parser.add_argument("--verbose", action="store_true", help="詳細なログを出力します。")
 
     return parent_parser
-

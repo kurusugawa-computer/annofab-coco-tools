@@ -1,5 +1,4 @@
 import inspect
-import json
 import logging
 import sys
 from functools import wraps
@@ -72,57 +71,6 @@ def read_lines_except_blank_line(filepath: str) -> list[str]:
     return [line for line in lines if line != ""]
 
 
-def _get_file_scheme_path(str_value: str) -> str | None:
-    """
-    file schemaのパスを取得する。file schemeでない場合は、Noneを返す
-
-    """
-    FILE_SCHEME_PREFIX = "file://"
-    if str_value.startswith(FILE_SCHEME_PREFIX):
-        return str_value[len(FILE_SCHEME_PREFIX) :]
-    else:
-        return None
-
-
-def get_list_from_args(str_list: list[str]) -> list[str]:
-    """
-    文字列のListのサイズが1で、プレフィックスが`file://`ならば、ファイルパスとしてファイルを読み込み、行をListとして返す。
-    そうでなければ、引数の値をそのまま返す。
-
-    Args:
-        str_list: コマンドライン引数で指定されたリスト、またはfileスキームのURL
-
-    Returns:
-        コマンドライン引数で指定されたリスト。
-    """
-    if len(str_list) > 1:
-        return str_list
-
-    str_value = str_list[0]
-    path = _get_file_scheme_path(str_value)
-    if path is not None:
-        return read_lines_except_blank_line(path)
-    else:
-        return str_list
-
-
-def get_json_from_args(target: str | None = None) -> Any:  # noqa: ANN401
-    """
-    JSON形式をPythonオブジェクトに変換する。
-    プレフィックスが`file://`ならば、ファイルパスとしてファイルを読み込み、Pythonオブジェクトを返す。
-    """
-
-    if target is None:
-        return None
-
-    path = _get_file_scheme_path(target)
-    if path is not None:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    else:
-        return json.loads(target)
-
-
 def prompt_yesno(msg: str) -> bool:
     """
     標準入力で yes, noを選択できるようにする。
@@ -151,7 +99,7 @@ def log_exception(logger: Any):  # noqa: ANN201, ANN401
 
     def decorator(func):  # noqa: ANN001, ANN202
         @wraps(func)
-        def wrapper(*args, **kwargs):  # noqa: ANN202
+        def wrapper(*args, **kwargs):  # noqa: ANN202, ANN003, ANN002
             try:
                 return func(*args, **kwargs)
             except Exception as e:

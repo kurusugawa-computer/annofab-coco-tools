@@ -1,23 +1,17 @@
-import zipfile
-import collections
-import argparse
 import collections
 import json
 import sys
-from jsonargparse import ArgumentParser
+import zipfile
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
-from annofabapi.parser import SimpleAnnotationDirParser
+from annofabapi.parser import lazy_parse_simple_annotation_dir, lazy_parse_simple_annotation_zip
+from jsonargparse import ArgumentParser
 from loguru import logger
-from more_itertools import first_true
-from pydantic import BaseModel
-from yaml import safe_load
 
 from src.common.cli import create_parent_parser
 from src.common.utils import configure_loguru, log_exception
-from typing import Collections
-from annofabapi.parser import lazy_parse_simple_annotation_dir, lazy_parse_simple_annotation_zip
 
 
 def convert_af_input_data_to_coco_image(af_input_data: dict[str, Any], coco_image_id: int) -> dict[str, Any]:
@@ -48,10 +42,10 @@ def convert_af_input_data_list_to_coco_images(af_input_data_list: list[dict[str,
 
 class AnnotationConverterFromAnnofabToCoco:
     def __init__(
-        self, coco_categories: list[dict[str, Any]], coco_images: list[dict[str, Any]], *, target_af_target_labels: Collections[str] | None = None, should_clip_annotation_to_image: bool = False
+        self, coco_categories: list[dict[str, Any]], coco_images: list[dict[str, Any]], *, target_af_target_labels: Collection[str] | None = None, should_clip_annotation_to_image: bool = False
     ) -> None:
-        self.category_ids_by_name: dict[int, str] = {category["name"]: category["id"] for category in coco_categories}
-        self.images_by_file_name: dict[int, str] = {image["file_name"]: image for image in coco_images}
+        self.category_ids_by_name: dict[str, int] = {category["name"]: category["id"] for category in coco_categories}
+        self.images_by_file_name: dict[str, dict[str, Any]] = {image["file_name"]: image for image in coco_images}
         self.should_clip_annotation_to_image = should_clip_annotation_to_image
 
         self.target_af_target_labels = set(target_af_target_labels) if target_af_target_labels is not None else None
@@ -151,20 +145,25 @@ class AnnotationConverterFromAnnofabToCoco:
             coco_annotation_id += 1
         return coco_annotations, coco_annotation_id
 
-    def convert_af_annotation_dir(
+    def convert_af_annotation_path(
         self,
         af_annotation_path: Path,
         *,
-        target_task_ids: Collections[str] | None = None,
-        target_input_data_ids: Collections[str] | None = None,
+        target_task_ids: Collection[str] | None = None,
+        target_input_data_ids: Collection[str] | None = None,
         target_task_phase: str | None,
         target_task_status: str | None,
-    ) -> list[dict[str, Any]]:  # noqa: PLR0912, PLR0915
+    ) -> list[dict[str, Any]]:
         """
-        AnnofabからダウンロードしたアノテーションZIPまたは展開したディレクトリから、COCO形式のアノテーションを生成します。
+        AnnofabからダウンロードしたアノテーションZIPまたは展開したディレクトリを、COCO形式のアノテーションに変換します。
 
-        Raises:
-            ValueError: アノテーションに問題がある場合
+        Args:
+            af_annotation_path: Annofab形式のアノテーションZIPファイルまたはそれを展開したディレクトリのパス
+            target_task_ids: 変換対象のタスクのID
+            target_input_data_ids: 変換対象の入力データのID
+            target_task_phase: 変換対象のタスクのフェーズ
+            target_task_status: 変換対象のタスクのステータス
+
 
         """
         coco_start_annotation_id = 1
@@ -220,21 +219,35 @@ def create_parser() -> ArgumentParser:
     )
 
     parser.add_argument(
+        "--af_input_data_json",
+        type=Path,
+        required=True,
+        help="Annofabの入力データ全件ファイルのパス。画像サイズを取得するのに利用します。`annofabcli input_data download`コマンドでダウンロードできます。",
+    )
+
+    parser.add_argument(
         "--coco_instances_json", type=Path, required=True, help="入力情報であるCOCOデータセット（Instances）形式アノテーションのJSONファイルのパス。`categories`と`images`(オプショナル)を参照します。"
     )
 
     parser.add_argument("-o", "--output_coco_instances_json", type=Path, required=True, help="変換後のCOCOデータセット（Instances）形式アノテーションの出力先JSONファイルのパス")
 
-    parser.add_argument("--af_task_id", type=str, nargs="+", help="変換対象のタスクのID")
-    parser.add_argument("--af_input_data_id", type=str, nargs="+", help="変換対象の入力データのID")
-    parser.add_argument("--af_task_phase", type=str, help="変換対象のタスクのフェーズ")
-    parser.add_argument("--af_task_status", type=str, help="変換対象のタスクのステータス")
+    parser.add_argument(
+        "--clip_annotation_to_image",
+        action="store_true",
+        help="指定すると、アノテーションが画像からはみ出さないようにクリッピングします。Annofabは矩形やポリゴンは画像外に作図できます。ただし、塗りつぶしアノテーションは画像外に作図できません。",
+    )
+
+    parser.add_argument("--af_task_id", type=str, nargs="+", help="変換対象のAnnofabのタスクのID")
+    parser.add_argument("--af_input_data_id", type=str, nargs="+", help="変換対象のAnnofabの入力データのID")
+    parser.add_argument("--af_label_name", type=str, nargs="+", help="変換対象のAnnofabのラベル名（英語）")
+    parser.add_argument("--af_task_phase", type=str, help="変換対象のAnnofabのタスクのフェーズ")
+    parser.add_argument("--af_task_status", type=str, help="変換対象のAnnofabのタスクのステータス")
 
     return parser
 
 
 @log_exception(logger=logger)
-def main() -> None:  # noqa: PLR0915, PLR0912
+def main() -> None:
     args = create_parser().parse_args()
     configure_loguru(is_verbose=args.verbose)
     logger.info(f"argv={sys.argv}")
@@ -244,8 +257,36 @@ def main() -> None:  # noqa: PLR0915, PLR0912
         logger.error(f"'{af_annotation_dir}'はディレクトリではありません。")
         sys.exit(1)
 
-    output_dir = args.output_dir
-    output_dir.mkdir(exist_ok=True, parents=True)
+    coco_instances = json.loads(args.coco_instances_json.read_text())
+
+    if args.af_input_data_json is not None:
+        af_input_data_list = json.loads(args.af_input_data_json.read_text())
+        coco_images = convert_af_input_data_list_to_coco_images(af_input_data_list)
+        logger.info(f"'{args.af_input_data_json}'に格納されているAnnofabの入力データ {len(af_input_data_list)} 件を、COCO形式のimagesに変換しました。")
+    else:
+        coco_images = coco_instances["images"]
+        logger.info(f"'{args.coco_instances_json}'に格納されているCOCO形式のimages（{len(coco_images)} 件）をそのまま利用します。")
+
+    coco_categories = coco_instances["categories"]
+    converter = AnnotationConverterFromAnnofabToCoco(
+        coco_categories=coco_categories,
+        coco_images=coco_images,
+        target_af_target_labels=set(args.af_label_name),
+        should_clip_annotation_to_image=args.clip_annotation_to_image,
+    )
+
+    coco_annotations = converter.convert_af_annotation_path(
+        args.af_annotation_path, target_input_data_ids=args.af_input_data_id, target_task_ids=args.af_task_id, target_task_phase=args.af_task_phase, target_task_status=args.af_task_status
+    )
+
+    result_coco_instances = {
+        "images": coco_images,
+        "annotations": coco_annotations,
+        "categories": coco_categories,
+    }
+    output_coco_instances_json = args.output_coco_instances_json
+    output_coco_instances_json.mkdir(exist_ok=True, parents=True)
+    output_coco_instances_json.write_text(json.dumps(result_coco_instances, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
