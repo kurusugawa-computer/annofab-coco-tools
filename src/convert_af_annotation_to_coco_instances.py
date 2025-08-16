@@ -136,7 +136,7 @@ class AnnotationConverterFromAnnofabToCoco:
             if self.target_af_target_labels is not None and af_detail["label"] not in self.target_af_target_labels:
                 continue
 
-            if af_detail["data"]["_type"] != "BoundingBox":
+            if af_detail["data"]["_type"] == "BoundingBox":
                 coco_annotation = self.convert_af_bounding_box_detail(af_detail, coco_image, coco_annotation_id, task_id=task_id, input_data_id=input_data_id)
             else:
                 continue
@@ -147,7 +147,7 @@ class AnnotationConverterFromAnnofabToCoco:
 
     def convert_af_annotation_path(
         self,
-        af_annotation_path: Path,
+        af_annotation_zip_or_dir: Path,
         *,
         target_task_ids: Collection[str] | None = None,
         target_input_data_ids: Collection[str] | None = None,
@@ -158,7 +158,7 @@ class AnnotationConverterFromAnnofabToCoco:
         AnnofabからダウンロードしたアノテーションZIPまたは展開したディレクトリを、COCO形式のアノテーションに変換します。
 
         Args:
-            af_annotation_path: Annofab形式のアノテーションZIPファイルまたはそれを展開したディレクトリのパス
+            af_annotation_zip_or_dir: Annofab形式のアノテーションZIPファイルまたはそれを展開したディレクトリのパス
             target_task_ids: 変換対象のタスクのID
             target_input_data_ids: 変換対象の入力データのID
             target_task_phase: 変換対象のタスクのフェーズ
@@ -168,12 +168,12 @@ class AnnotationConverterFromAnnofabToCoco:
         """
         coco_start_annotation_id = 1
 
-        if zipfile.is_zipfile(af_annotation_path):
-            iter_af_annotation_parser = lazy_parse_simple_annotation_zip(af_annotation_path)
-        elif af_annotation_path.is_dir():
-            iter_af_annotation_parser = lazy_parse_simple_annotation_dir(af_annotation_path)
+        if zipfile.is_zipfile(af_annotation_zip_or_dir):
+            iter_af_annotation_parser = lazy_parse_simple_annotation_zip(af_annotation_zip_or_dir)
+        elif af_annotation_zip_or_dir.is_dir():
+            iter_af_annotation_parser = lazy_parse_simple_annotation_dir(af_annotation_zip_or_dir)
         else:
-            raise ValueError(f"'{af_annotation_path}'はZIPファイルでもディレクトリでもありません。")
+            raise ValueError(f"'{af_annotation_zip_or_dir}'はZIPファイルでもディレクトリでもありません。")
 
         coco_annotations = []
 
@@ -201,7 +201,7 @@ class AnnotationConverterFromAnnofabToCoco:
                 logger.opt(exception=True).warning(f"AnnofabのアノテーションJSONファイル'{af_parser.json_file_path}'の変換に失敗しました。")
                 continue
 
-        logger.info(f"Annofab形式のアノテーション'{af_annotation_path}'に含まれる{success_count}個のJSONファイルを、COCO形式のannotations（{len(coco_annotations)}個）に変換しました。")
+        logger.info(f"Annofab形式のアノテーション'{af_annotation_zip_or_dir}'に含まれる{success_count}個のJSONファイルを、COCO形式のannotations（{len(coco_annotations)}個）に変換しました。")
         return coco_annotations
 
 
@@ -212,7 +212,7 @@ def create_parser() -> ArgumentParser:
     )
 
     parser.add_argument(
-        "--af_annotation_path",
+        "--af_annotation_zip_or_dir",
         type=Path,
         required=True,
         help="Annofab形式のアノテーションZIPファイルのパス。またはZIPファイルを展開したディレクトリのパス。`annofabcli annotation download`コマンドでアノテーションZIPファイルをダウンロードできます。",
@@ -221,8 +221,9 @@ def create_parser() -> ArgumentParser:
     parser.add_argument(
         "--af_input_data_json",
         type=Path,
-        required=True,
-        help="Annofabの入力データ全件ファイルのパス。画像サイズを取得するのに利用します。`annofabcli input_data download`コマンドでダウンロードできます。",
+        required=False,
+        help="Annofabの入力データ全件ファイルのパス。COCO形式のimagesを生成するのに利用します。`annofabcli input_data download`コマンドでダウンロードできます。"
+        "未指定の場合は、'--coco_instances_json'に指定したJSONファイルの'images'を利用します。",
     )
 
     parser.add_argument(
@@ -252,11 +253,6 @@ def main() -> None:
     configure_loguru(is_verbose=args.verbose)
     logger.info(f"argv={sys.argv}")
 
-    af_annotation_dir = Path(args.annotation)
-    if not af_annotation_dir.is_dir():
-        logger.error(f"'{af_annotation_dir}'はディレクトリではありません。")
-        sys.exit(1)
-
     coco_instances = json.loads(args.coco_instances_json.read_text())
 
     if args.af_input_data_json is not None:
@@ -271,12 +267,12 @@ def main() -> None:
     converter = AnnotationConverterFromAnnofabToCoco(
         coco_categories=coco_categories,
         coco_images=coco_images,
-        target_af_target_labels=set(args.af_label_name),
+        target_af_target_labels=args.af_label_name,
         should_clip_annotation_to_image=args.clip_annotation_to_image,
     )
 
     coco_annotations = converter.convert_af_annotation_path(
-        args.af_annotation_path, target_input_data_ids=args.af_input_data_id, target_task_ids=args.af_task_id, target_task_phase=args.af_task_phase, target_task_status=args.af_task_status
+        args.af_annotation_zip_or_dir, target_input_data_ids=args.af_input_data_id, target_task_ids=args.af_task_id, target_task_phase=args.af_task_phase, target_task_status=args.af_task_status
     )
 
     result_coco_instances = {
@@ -285,7 +281,7 @@ def main() -> None:
         "categories": coco_categories,
     }
     output_coco_instances_json = args.output_coco_instances_json
-    output_coco_instances_json.mkdir(exist_ok=True, parents=True)
+    output_coco_instances_json.parent.mkdir(exist_ok=True, parents=True)
     output_coco_instances_json.write_text(json.dumps(result_coco_instances, indent=2, ensure_ascii=False))
 
 
