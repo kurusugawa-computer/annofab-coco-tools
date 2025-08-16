@@ -14,6 +14,35 @@ from src.common.cli import create_parent_parser
 from src.common.utils import configure_loguru, log_exception
 
 
+def clip_bounding_box_to_image(
+    left_top: dict[str, int],
+    right_bottom: dict[str, int],
+    image_width: int,
+    image_height: int,
+) -> tuple[dict[str, int], dict[str, int]]:
+    """
+    境界ボックス（bbox）が画像からはみ出ていないかチェックし、はみ出ていれば修正します。
+
+    Args:
+        left_top: 左上座標（Annofab形式）
+        right_bottom: 右下座標（Annofab形式）
+        image_width: 画像の幅
+        image_height: 画像の高さ
+
+    Returns:
+        修正後の左上座標、右下座標
+    """
+    new_left_top = {
+        "x": max(left_top["x"], 0),
+        "y": max(left_top["y"], 0),
+    }
+    new_right_bottom = {
+        "x": min(right_bottom["x"], image_width),
+        "y": min(right_bottom["y"], image_height),
+    }
+    return new_left_top, new_right_bottom
+
+
 def convert_af_input_data_to_coco_image(af_input_data: dict[str, Any], coco_image_id: int) -> dict[str, Any]:
     """
     Annofabの入力データ情報をCOCO形式のimage情報に変換します。
@@ -61,43 +90,27 @@ class AnnotationConverterFromAnnofabToCoco:
         right_bottom = af_detail["data"]["right_bottom"].copy()
         image_width = coco_image["width"]
         image_height = coco_image["height"]
+        coco_image_id = coco_image["id"]
 
         if self.should_clip_annotation_to_image:
             # bboxが画像からはみ出ていないかチェックし、はみ出ていれば修正
-            orig_left_top = left_top.copy()
-            orig_right_bottom = right_bottom.copy()
-            modified = False
-            if left_top["x"] < 0:
-                left_top["x"] = 0
-                modified = True
-            if left_top["y"] < 0:
-                left_top["y"] = 0
-                modified = True
-            if right_bottom["x"] > image_width:
-                right_bottom["x"] = image_width
-                modified = True
-            if right_bottom["y"] > image_height:
-                right_bottom["y"] = image_height
-                modified = True
-            if image_width is not None and left_top["x"] > image_width:
-                left_top["x"] = image_width
-                modified = True
-            if image_height is not None and left_top["y"] > image_height:
-                left_top["y"] = image_height
-                modified = True
-            if right_bottom["x"] < left_top["x"]:
-                right_bottom["x"] = left_top["x"]
-                modified = True
-            if right_bottom["y"] < left_top["y"]:
-                right_bottom["y"] = left_top["y"]
-                modified = True
-            if modified:
+            original_left_top = left_top
+            original_right_bottom = right_bottom
+            new_left_top, new_right_bottom = clip_bounding_box_to_image(
+                original_left_top,
+                original_right_bottom,
+                image_width,
+                image_height,
+            )
+            if new_left_top != left_top or new_right_bottom != right_bottom:
                 logger.debug(
                     f"bboxが画像からはみ出ていたため修正しました。 :: "
-                    f"task_id='{task_id}', input_data_id='{input_data_id}', annotation_id='{annotation_id}', coco_image_id='{coco_image['id']}', coco_annotation_id='{coco_annotation_id}' :: "
-                    f"original_left_top={orig_left_top}, original_right_bottom={orig_right_bottom}, "
-                    f"new_left_top={left_top}, new_right_bottom={right_bottom}"
+                    f"task_id='{task_id}', input_data_id='{input_data_id}', annotation_id='{annotation_id}', coco_image_id='{coco_image_id}', coco_annotation_id='{coco_annotation_id}' :: "
+                    f"original_left_top={original_left_top}, original_right_bottom={original_right_bottom}, "
+                    f"new_left_top={new_left_top}, new_right_bottom={new_right_bottom}"
                 )
+            left_top = new_left_top
+            right_bottom = new_right_bottom
 
         bbox = [left_top["x"], left_top["y"], right_bottom["x"] - left_top["x"], right_bottom["y"] - left_top["y"]]
         segmentation = [[left_top["x"], left_top["y"], right_bottom["x"], left_top["y"], right_bottom["x"], right_bottom["y"], left_top["x"], right_bottom["y"]]]
