@@ -2,7 +2,6 @@ import inspect
 import logging
 import sys
 from functools import wraps
-from typing import Any
 
 from loguru import logger
 
@@ -90,8 +89,7 @@ def prompt_yesno(msg: str) -> bool:
             return False
 
 
-# 引数にloggerを受け取る
-def log_exception(logger: Any):  # noqa: ANN201, ANN401
+def log_exception():  # noqa: ANN201
     """
     例外発生時に指定したメッセージをログに出力するデコレータ。
     例外は再スローされる。

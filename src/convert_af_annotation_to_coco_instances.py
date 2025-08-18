@@ -125,7 +125,7 @@ class AnnotationConverterFromAnnofabToCoco:
             "bbox": bbox,
             "segmentation": segmentation,
             "area": area,
-            # TODO 属性値から算出する
+            # TODO 属性値から算出する  # noqa: FIX002
             "iscrowd": 0,
         }
 
@@ -264,7 +264,7 @@ def create_parser() -> ArgumentParser:
     return parser
 
 
-@log_exception(logger=logger)
+@log_exception()
 def main() -> None:
     args = create_parser().parse_args()
     configure_loguru(is_verbose=args.verbose)
