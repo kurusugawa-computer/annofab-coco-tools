@@ -6,15 +6,16 @@ import sys
 import uuid
 from argparse import ArgumentParser
 from collections.abc import Collection
+from enum import Enum
 from pathlib import Path
-from typing import Any, Enum, assert_never
+from typing import Any, assert_never
 
 import numpy
 import pycocotools
 from annofabapi.segmentation import write_binary_image
 from loguru import logger
 
-from src.common.cli import PrettyHelpFormatter, create_parent_parser
+from src.common.cli import create_parent_parser
 from src.common.utils import configure_loguru, log_exception
 
 
@@ -58,8 +59,8 @@ class AnnotationConverterFromCocoToAnnofab:
         attributes = {
             "coco.annotation_id": coco_annotation["id"],
         }
-        data = {"left_top": {"x": left_top_x, "y": left_top_y}, "right_bottom": {"x": left_top_x + width, "y": left_top_y + height}, "_type": "BoundingBox"}
         left_top_x, left_top_y, width, height = coco_annotation["bbox"]
+        data = {"left_top": {"x": left_top_x, "y": left_top_y}, "right_bottom": {"x": left_top_x + width, "y": left_top_y + height}, "_type": "BoundingBox"}
         return {"annotation_id": str(uuid.uuid4()), "label": coco_category_name, "attributes": attributes, "data": data}
 
     def convert_polygon_segmentation_annotation_to_af_detail(self, coco_annotation: dict[str, Any]) -> list[dict[str, Any]]:
@@ -115,7 +116,7 @@ class AnnotationConverterFromCocoToAnnofab:
 
         # 以下のコードと同じように、rleを取得した
         # https://github.com/ppwwyyxx/cocoapi/blob/8cbc887b3da6cb76c7cc5b10f8e082dd29d565cb/PythonAPI/pycocotools/coco.py#L266C1-L269C56
-        if type(segmentation["counts"]) == list:
+        if isinstance(segmentation["counts"], list):
             rle = pycocotools.mask.frPyObjects(segmentation, coco_image["height"], coco_image["width"])
         else:
             rle = segmentation
@@ -244,28 +245,6 @@ def create_input_data_name_to_input_data_id_mapping(input_data_json: Path) -> di
     return result
 
 
-def create_input_data_name_to_input_data_id_mapping(input_data_json: Path) -> dict[str, str]:
-    """
-    `annofabcli input_data download`コマンドの出力結果であるJSONファイルから、input_data_nameとinput_data_idのマッピングを作成します。
-
-    Returns:
-        keyが`input_data_name`、valueが`input_data_id`の辞書
-
-    Raises:
-        ValueError: 1個の入力データが複数のタスクから参照されている
-    """
-    input_data = json.loads(input_data_json.read_text())
-    result = {}
-    for item in input_data:
-        input_data_name = item["input_data_name"]
-        input_data_id = item["input_data_id"]
-        if input_data_name in result:
-            raise ValueError(f"input_data_name='{input_data_name}'の入力データは複数のIDに含まれています。入力データは1個のIDのみ含まれるように変更してください。")
-
-        result[input_data_name] = input_data_id
-    return result
-
-
 def execute_annofabcli_task_download(project_id: str, output_json: Path, *, is_latest: bool) -> None:
     command = ["annofabcli", "task", "download", "--project_id", project_id, "--output", str(output_json)]
     if is_latest:
@@ -276,7 +255,6 @@ def execute_annofabcli_task_download(project_id: str, output_json: Path, *, is_l
 def create_parser() -> argparse.ArgumentParser:
     parser = ArgumentParser(
         description="COCOデータセット（Instances）に含まれるアノテーションを、Annofab形式に変換します。出力結果は`annofabcli annotation import`コマンドでアノテーションを登録できます。",
-        formatter_class=PrettyHelpFormatter,
         parents=[create_parent_parser()],
     )
 
