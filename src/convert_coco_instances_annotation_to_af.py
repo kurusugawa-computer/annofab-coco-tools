@@ -1,10 +1,9 @@
-import argparse
 import collections
 import json
 import subprocess
 import sys
 import uuid
-from argparse import ArgumentParser
+from jsonargparse import ArgumentParser
 from collections.abc import Collection
 from enum import Enum
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Any, assert_never
 
 import numpy
 import pycocotools
+import pycocotools.mask
 from annofabapi.segmentation import write_binary_image
 from loguru import logger
 
@@ -167,9 +167,10 @@ class AnnotationConverterFromCocoToAnnofab:
         COCO形式のアノテーション全体をAnnofab形式に変換します。
         """
         output_dir.mkdir(exist_ok=True, parents=True)
-        success_count = 0
+        success_image_count = 0
+        success_annotation_count = 0
         logger.info(f"COCOデータセットの{len(self.coco_images)}件のimagesに紐づくアノテーションを、Annofab形式に変換します。")
-
+        
         for image_index, coco_image in enumerate(self.coco_images):
             if (image_index + 1) % 1000 == 0:
                 logger.info(f"{image_index + 1}件目のCOCO imagesに紐づくアノテーションを、Annofabフォーマットに変換中...")
@@ -190,15 +191,18 @@ class AnnotationConverterFromCocoToAnnofab:
                 af_details = self.convert_annotations_to_af_details(coco_image, af_input_data_dir=output_dir / af_task_id / af_input_data_id)
                 if len(af_details) == 0:
                     logger.debug(f"COCOのimage.file_name='{image_file_name}'に紐づく変換対象のアノテーションは存在しません。")
+                    continue
 
                 af_annotation_json.parent.mkdir(exist_ok=True, parents=True)
                 af_annotation_json.write_text(json.dumps({"details": af_details}, ensure_ascii=False, indent=2))
-                success_count += 1
+                success_image_count += 1
+                success_annotation_count += len(af_details)
                 logger.debug(f"COCOのimage.file_name='{image_file_name}'に紐づくアノテーション{len(af_details)}件を、Annofab形式に変換して'{af_annotation_json}'に出力しました。")
             except Exception:
                 logger.opt(exception=True).warning(f"COCOのimage.file_name='{image_file_name}'に紐づくアノテーションを、Annofabフォーマットへ変換するのに失敗しました。")
+                continue
 
-        logger.info(f"{success_count}/{len(self.coco_images)}件のCOCO imagesに紐づくアノテーションを、Annofabフォーマットに変換しました。 :: output_dir='{output_dir}'")
+        logger.info(f"{success_image_count}/{len(self.coco_images)}件のCOCOデータセットimagesに紐づくアノテーション{success_annotation_count}件を、Annofabフォーマットに変換しました。 :: output_dir='{output_dir}'")
 
 
 def create_input_data_id_to_task_id_mapping(task_json: Path) -> dict[str, str]:
@@ -252,7 +256,7 @@ def execute_annofabcli_task_download(project_id: str, output_json: Path, *, is_l
     subprocess.run(command, check=True)
 
 
-def create_parser() -> argparse.ArgumentParser:
+def create_parser() -> ArgumentParser:
     parser = ArgumentParser(
         description="COCOデータセット（Instances）に含まれるアノテーションを、Annofab形式に変換します。出力結果は`annofabcli annotation import`コマンドでアノテーションを登録できます。",
         parents=[create_parent_parser()],
@@ -265,6 +269,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--af_task_json",
         type=Path,
+        required=True,
         help="Annofabのタスク全件ファイルのパス。"
         "`task_id`と`input_data_id`の関係を参照するのに利用します。"
         "`annofabcli task download`コマンドでダウンロードできます。"
@@ -274,10 +279,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--af_input_data_json",
         type=Path,
+        required=True,
         help="Annofabの入力データ全件ファイルのパス。`input_data_name`と`input_data_id`の関係を参照するのに利用します。`annofabcli input_data download`コマンドでダウンロードできます。",
     )
 
-    parser.add_argument("--coco_category_name", type=str, nargs="+", help="変換対象のCOCOのcategory_name")
     parser.add_argument(
         "--coco_annotation_type",
         type=str,
@@ -287,9 +292,10 @@ def create_parser() -> argparse.ArgumentParser:
         help="変換対象のアノテーションの種類。`bbox`:バウンディングボックス, `polygon_segmentation`:`iscrowd=0`のポリゴン形式のsegmentation, `rle_segmentation`:`iscrowd=1`のRLE形式のsegmentation",
     )
 
+    parser.add_argument("--coco_category_name", type=str, nargs="+", help="変換対象のCOCOのcategory_name")
+
     parser.add_argument("-o", "--output_dir", type=Path, required=True, help="Annofab形式のアノテーションの出力先ディレクトリのパス")
 
-    parser.add_argument("--temp_dir", type=Path, required=True, help="一時ディレクトリのパス")
     return parser
 
 
