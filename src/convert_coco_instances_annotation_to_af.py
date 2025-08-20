@@ -81,22 +81,19 @@ class AnnotationConverterFromCocoToAnnofab:
 
         attributes = {
             "coco.annotation_id": coco_annotation["id"],
+            "coco.image_id": coco_annotation["image_id"],
         }
         segmentation = coco_annotation["segmentation"]
         assert isinstance(segmentation, list)
-        if isinstance(segmentation[0], list):
-            return [
-                {
-                    "label": coco_category_name,
-                    "annotation_id": str(uuid.uuid4()),
-                    "attributes": attributes,
-                    "data": convert_coco_one_segmentation_to_af_format(polygon),
-                }
-                for polygon in segmentation
-            ]
-        else:
-            data = convert_coco_one_segmentation_to_af_format(segmentation)
-            return [{"label": coco_category_name, "attributes": attributes, "data": data}]
+        return [
+            {
+                "label": coco_category_name,
+                "annotation_id": str(uuid.uuid4()),
+                "attributes": attributes,
+                "data": convert_coco_one_segmentation_to_af_format(polygon),
+            }
+            for polygon in segmentation
+        ]
 
     def convert_rle_segmentation_annotation_to_af_detail(self, coco_annotation: dict[str, Any], coco_image: dict[str, Any]) -> tuple[dict[str, Any] | None, numpy.ndarray | None]:
         """
@@ -115,6 +112,7 @@ class AnnotationConverterFromCocoToAnnofab:
 
         attributes = {
             "coco.annotation_id": coco_annotation["id"],
+            "coco.image_id": coco_annotation["image_id"],
         }
         segmentation = coco_annotation["segmentation"]
 
@@ -207,7 +205,8 @@ class AnnotationConverterFromCocoToAnnofab:
                 continue
 
         logger.info(
-            f"{success_image_count}/{len(self.coco_images)}件のCOCOデータセットimagesに紐づくアノテーション{success_annotation_count}件を、Annofabフォーマットに変換しました。 :: output_dir='{output_dir}'"
+            f"{success_image_count}/{len(self.coco_images)}件のCOCOデータセットimagesに紐づくアノテーション{success_annotation_count}件を、Annofabフォーマットに変換しました。"
+            f" :: output_dir='{output_dir}'"
         )
 
 

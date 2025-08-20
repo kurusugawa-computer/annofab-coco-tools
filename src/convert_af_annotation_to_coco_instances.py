@@ -125,7 +125,6 @@ class AnnotationConverterFromAnnofabToCoco:
             "bbox": bbox,
             "segmentation": segmentation,
             "area": area,
-            # TODO 属性値から算出する  # noqa: FIX002
             "iscrowd": 0,
         }
 
