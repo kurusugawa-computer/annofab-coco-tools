@@ -58,6 +58,7 @@ def create_parser() -> ArgumentParser:
 
     parser.add_argument("--af_project_id", type=str, required=True, help="AnnofabプロジェクトのID")
 
+    parser.add_argument("--coco_image_file_name", type=str, nargs="+", help="作成対象のCOCOのimageのfile_name")
     parser.add_argument("--temp_dir", type=Path, required=False, help="一時ディレクトリのパス")
 
     return parser
@@ -73,9 +74,12 @@ def main() -> None:
     af_project_id = args.af_project_id
 
     coco_instances = json.loads(args.coco_instances_json.read_text())
-    json_info = create_target_input_data_info(coco_instances["images"], image_dir)
+    coco_images = coco_instances["images"]
+    if args.coco_image_file_name is not None:
+        coco_images = [img for img in coco_images if img["file_name"] in args.coco_image_file_name]
+    json_info = create_target_input_data_info(coco_images, image_dir)
 
-    logger.info(f"COCOデータセットの`images`に含まれている画像ファイル{len(json_info)}件を、Annofabへ入力データとして登録します。 :: af_project_id='{af_project_id}'")
+    logger.info(f"COCOデータセットのimage{len(json_info)}件を、Annofabへ入力データとして登録します。 :: af_project_id='{af_project_id}'")
 
     if args.temp_dir is not None:
         temp_dir = args.temp_dir
