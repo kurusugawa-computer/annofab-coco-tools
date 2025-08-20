@@ -294,7 +294,8 @@ class AnnotationConverterFromAnnofabToCoco:
 
 def create_parser() -> ArgumentParser:
     parser = ArgumentParser(
-        description="Annofab形式のアノテーションを、COCOデータセット（Instances）形式に変換します。",
+        description="Annofab形式のアノテーションを、COCOデータセット（Instances）形式に変換します。"
+        "Annofabのinput_data_nameはCOCOのimage.file_nameに、Annofabのラベル名(英語)はCOCOのcategory.nameに変換します。",
         parents=[create_parent_parser()],
     )
 
@@ -334,7 +335,7 @@ def create_parser() -> ArgumentParser:
     return parser
 
 
-@log_exception(logger=logger)
+@log_exception()
 def main() -> None:
     args = create_parser().parse_args()
     configure_loguru(is_verbose=args.verbose)

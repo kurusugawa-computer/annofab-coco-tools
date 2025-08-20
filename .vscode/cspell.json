@@ -45,6 +45,7 @@
         "iloc",
         "imwrite",
         "inplace",
+        "iscrowd",
         "isin",
         "isna",
         "isnan",

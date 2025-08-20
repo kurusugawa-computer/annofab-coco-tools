@@ -56,11 +56,8 @@ ignore = [
     "RUF003",# 全角記号など`ambiguous unicode character`も使いたいため
     "PLC1901", # compare-to-empty-string : `if a == "`のように空文字列で直接比較したいときがあるため
     "PLR2004", # magic-value-comparison: listのサイズで判定するときがよくあるため
-    # "ANN002", # missing-type-args
-    # "ANN003", # missing-type-kwargs
+    "TD", # flake8-todos: TODOコメントのフォーマットを決めていないため    
     "ERA", # : 役立つこともあるが、コメントアウトしていないコードも警告されるので無視する
-    # "PD901",
-    # "PLC2401", # 日本語も変数名やメソッド名に使うため
 
 
     # 以下のルールはannofabcliのコードに合っていないので無効化した
