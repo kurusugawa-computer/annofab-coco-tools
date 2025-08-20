@@ -1,6 +1,5 @@
 import collections
 import json
-import subprocess
 import sys
 import uuid
 from collections.abc import Collection
@@ -34,9 +33,19 @@ def convert_coco_one_segmentation_to_af_format(polygon_segmentation: list[float]
 
 
 class AnnotationConverterFromCocoToAnnofab:
-    def __init__(self, coco_instances: dict[str, Any], coco_annotation_type: CocoAnnotationType, *, target_coco_category_names: Collection[str] | None = None) -> None:
+    def __init__(
+        self,
+        coco_instances: dict[str, Any],
+        coco_annotation_type: CocoAnnotationType,
+        *,
+        target_coco_category_names: Collection[str] | None = None,
+        target_coco_image_file_names: Collection[str] | None = None,
+    ) -> None:
         self.coco_annotation_type = coco_annotation_type
-        self.coco_images = coco_instances["images"]
+        coco_images = coco_instances["images"]
+        if target_coco_image_file_names is not None:
+            coco_images = [img for img in coco_images if img["file_name"] in set(target_coco_image_file_names)]
+        self.coco_images = coco_images
 
         annotations_by_image_id = collections.defaultdict(list)
         for coco_anno in coco_instances["annotations"]:
@@ -128,27 +137,39 @@ class AnnotationConverterFromCocoToAnnofab:
         af_detail = {"label": coco_category_name, "annotation_id": annotation_id, "attributes": attributes, "data": {"data_uri": annotation_id, "_type": "Segmentation"}}
         return af_detail, segmentation_bool_array
 
-    def convert_annotations_to_af_details(self, coco_image: dict[str, Any], af_input_data_dir: Path) -> list[dict[str, Any]]:
+    def convert_annotations_to_af_details(self, coco_image: dict[str, Any], af_input_data_dir: Path) -> tuple[list[dict[str, Any]], int]:
         """
         COCO形式の`images -> file_name`に対応するアノテーションをAnnofab形式の`details`に変換します。
 
         Args:
             coco_image: 変換対象のCOCO形式のimage情報
             af_input_data_dir: Annofab形式の入力データに対応するディレクトリ。塗りつぶしアノテーションに変換する場合、このディレクトリに塗りつぶし画像が格納されます。
+
+        Returns:
+            tuple[0]: 変換したAnnofab形式のdetails
+            tuple[1]: 変換したCOCOのアノテーションの個数。マルチポリゴンが存在する場合、この値と`len(tuple[0])`の結果は異なります。
         """
         coco_annotations = self.annotations_by_image_id[coco_image["id"]]
+        af_details = []
         match self.coco_annotation_type:
             case CocoAnnotationType.BBOX:
-                af_details = []
                 for anno in coco_annotations:
                     af_detail = self.convert_bbox_annotation_to_af_detail(anno)
                     if af_detail is not None:
                         af_details.append(af_detail)
+                return af_details, len(af_details)
 
             case CocoAnnotationType.POLYGON_SEGMENTATION:
-                af_details = [detail for anno in coco_annotations for detail in self.convert_polygon_segmentation_annotation_to_af_detail(anno)]
+                target_coco_annotation_count = 0
+                for anno in coco_annotations:
+                    sub_details = self.convert_polygon_segmentation_annotation_to_af_detail(anno)
+                    if len(sub_details) > 0:
+                        target_coco_annotation_count += 1
+                    af_details.extend(sub_details)
+
+                return af_details, target_coco_annotation_count
+
             case CocoAnnotationType.RLE_SEGMENTATION:
-                af_details = []
                 for anno in coco_annotations:
                     af_detail, segmentation_bool_array = self.convert_rle_segmentation_annotation_to_af_detail(anno, coco_image)
                     if af_detail is None:
@@ -159,18 +180,24 @@ class AnnotationConverterFromCocoToAnnofab:
                     with (af_input_data_dir / af_detail["annotation_id"]).open("wb") as f:
                         write_binary_image(segmentation_bool_array, f)
                     af_details.append(af_detail)
+                return af_details, len(af_details)
             case _ as unreachable:
                 assert_never(unreachable)
 
-        return af_details
-
-    def convert(self, output_dir: Path, input_data_id_to_task_id: dict[str, str], input_data_name_to_input_data_id: dict[str, str]) -> None:
+    def convert(self, output_dir: Path, input_data_id_to_task_id: dict[str, str] | None, input_data_name_to_input_data_id: dict[str, str] | None) -> None:
         """
         COCO形式のアノテーション全体をAnnofab形式に変換します。
+
+        Args:
+            output_dir: 変換したAnnofab形式のアノテーションを出力するディレクトリ
+            input_data_id_to_task_id: keyが`input_data_id`、valueが`task_id`のdict。Noneの場合、`task_id`は`input_data_id`と同じ値だとみなして変換します。
+            input_data_name_to_input_data_id: keyが`input_data_name`、valueが`input_data_id`のdict。Noneの場合、`input_data_name`は`input_data_id`と同じ値だとみなして変換します。
+
         """
         output_dir.mkdir(exist_ok=True, parents=True)
         success_image_count = 0
-        success_annotation_count = 0
+        skipped_image_count = 0
+        total_target_coco_annotation_count = 0
         logger.info(f"COCOデータセットの{len(self.coco_images)}件のimagesに紐づくアノテーションを、Annofab形式に変換します。")
 
         for image_index, coco_image in enumerate(self.coco_images):
@@ -178,34 +205,43 @@ class AnnotationConverterFromCocoToAnnofab:
                 logger.info(f"{image_index + 1}件目のCOCO imagesに紐づくアノテーションを、Annofabフォーマットに変換中...")
 
             image_file_name = coco_image["file_name"]
-            af_input_data_id = input_data_name_to_input_data_id.get(image_file_name)
+            af_input_data_id = input_data_name_to_input_data_id.get(image_file_name) if input_data_name_to_input_data_id is not None else image_file_name
             if af_input_data_id is None:
                 logger.warning(f"Annofabのinput_data_name='{image_file_name}'に対応するinput_data_idが見つかりません。スキップします。")
                 continue
 
-            af_task_id = input_data_id_to_task_id.get(af_input_data_id)
+            af_task_id = input_data_id_to_task_id.get(af_input_data_id) if input_data_id_to_task_id is not None else af_input_data_id
             if af_task_id is None:
                 logger.warning(f"Annofabのinput_data_id='{af_input_data_id}'に対応するtask_idが見つかりません。スキップします。")
                 continue
 
             af_annotation_json = output_dir / af_task_id / f"{af_input_data_id}.json"
             try:
-                af_details = self.convert_annotations_to_af_details(coco_image, af_input_data_dir=output_dir / af_task_id / af_input_data_id)
-                if len(af_details) == 0:
+                af_details, target_coco_annotation_count = self.convert_annotations_to_af_details(coco_image, af_input_data_dir=output_dir / af_task_id / af_input_data_id)
+                if target_coco_annotation_count == 0:
+                    skipped_image_count += 1
                     logger.debug(f"COCOのimage.file_name='{image_file_name}'に紐づく変換対象のアノテーションは存在しません。")
                     continue
 
                 af_annotation_json.parent.mkdir(exist_ok=True, parents=True)
                 af_annotation_json.write_text(json.dumps({"details": af_details}, ensure_ascii=False, indent=2))
                 success_image_count += 1
-                success_annotation_count += len(af_details)
-                logger.debug(f"COCOのimage.file_name='{image_file_name}'に紐づくアノテーション{len(af_details)}件を、Annofab形式に変換して'{af_annotation_json}'に出力しました。")
+                total_target_coco_annotation_count += target_coco_annotation_count
+                message = (
+                    f"COCOのimage.file_name='{image_file_name}'に紐づくアノテーション{target_coco_annotation_count}件を、Annofab形式に変換して、"
+                    f"'{af_annotation_json}'に出力しました。 :: "
+                    f"変換後のAnnofab形式のアノテーションは{len(af_details)}件です。"
+                )
+                if len(af_details) != target_coco_annotation_count:
+                    message += "（マルチポリゴンが存在するので、COCOのアノテーション数と異なります）。"
+                logger.debug(message)
             except Exception:
                 logger.opt(exception=True).warning(f"COCOのimage.file_name='{image_file_name}'に紐づくアノテーションを、Annofabフォーマットへ変換するのに失敗しました。")
                 continue
 
         logger.info(
-            f"{success_image_count}/{len(self.coco_images)}件のCOCOデータセットimagesに紐づくアノテーション{success_annotation_count}件を、Annofabフォーマットに変換しました。"
+            f"{success_image_count}/{len(self.coco_images)}件のCOCOデータセットimagesに紐づくアノテーション{total_target_coco_annotation_count}件を、Annofabフォーマットに変換しました。"
+            f"{skipped_image_count}件のCOCOデータセットのimagesは、アノテーションが存在しなかったためスキップしました。"
             f" :: output_dir='{output_dir}'"
         )
 
@@ -254,16 +290,11 @@ def create_input_data_name_to_input_data_id_mapping(input_data_json: Path) -> di
     return result
 
 
-def execute_annofabcli_task_download(project_id: str, output_json: Path, *, is_latest: bool) -> None:
-    command = ["annofabcli", "task", "download", "--project_id", project_id, "--output", str(output_json)]
-    if is_latest:
-        command.append("--latest")
-    subprocess.run(command, check=True)
-
-
 def create_parser() -> ArgumentParser:
     parser = ArgumentParser(
-        description="COCOデータセット（Instances）に含まれるアノテーションを、Annofab形式に変換します。出力結果は`annofabcli annotation import`コマンドでアノテーションを登録できます。",
+        description="COCOデータセット（Instances）に含まれるアノテーションを、Annofab形式に変換します。"
+        "出力結果は`annofabcli annotation import`コマンドでアノテーションを登録できます。"
+        "COCOのimage.file_nameはAnnofabのinput_data_name, COCOのcategory.nameはAnnofabのラベル名(英語)として変換します。",
         parents=[create_parent_parser()],
     )
 
@@ -274,9 +305,10 @@ def create_parser() -> ArgumentParser:
     parser.add_argument(
         "--af_task_json",
         type=Path,
-        required=True,
+        required=False,
         help="Annofabのタスク全件ファイルのパス。"
         "`task_id`と`input_data_id`の関係を参照するのに利用します。"
+        "未指定の場合は、`task_id`は`input_data_id`と同じ値だとみなして変換します。"
         "`annofabcli task download`コマンドでダウンロードできます。"
         "ダウンロードしたタスク全件ファイルに、作成したタスクの情報が含まれていない場合は、`--latest`オプションを付与して、最新のタスク全件ファイルをダウンロードしてください。",
     )
@@ -284,8 +316,10 @@ def create_parser() -> ArgumentParser:
     parser.add_argument(
         "--af_input_data_json",
         type=Path,
-        required=True,
-        help="Annofabの入力データ全件ファイルのパス。`input_data_name`と`input_data_id`の関係を参照するのに利用します。`annofabcli input_data download`コマンドでダウンロードできます。",
+        required=False,
+        help="Annofabの入力データ全件ファイルのパス。`input_data_name`と`input_data_id`の関係を参照するのに利用します。"
+        "未指定の場合は、`input_data_id`は`input_data_name`と同じ値だとみなして変換します。"
+        "`annofabcli input_data download`コマンドでダウンロードできます。",
     )
 
     parser.add_argument(
@@ -297,6 +331,7 @@ def create_parser() -> ArgumentParser:
         help="変換対象のアノテーションの種類。`bbox`:バウンディングボックス, `polygon_segmentation`:`iscrowd=0`のポリゴン形式のsegmentation, `rle_segmentation`:`iscrowd=1`のRLE形式のsegmentation",
     )
 
+    parser.add_argument("--coco_image_file_name", type=str, nargs="+", help="変換対象のCOCOのimageのfile_name")
     parser.add_argument("--coco_category_name", type=str, nargs="+", help="変換対象のCOCOのcategory_name")
 
     parser.add_argument("-o", "--output_dir", type=Path, required=True, help="Annofab形式のアノテーションの出力先ディレクトリのパス")
@@ -312,9 +347,11 @@ def main() -> None:
 
     coco_instances = json.loads(args.coco_instances_json.read_text())
 
-    input_data_id_to_task_id = create_input_data_id_to_task_id_mapping(args.af_task_json)
-    input_data_name_to_input_data_id = create_input_data_name_to_input_data_id_mapping(args.af_input_data_json)
-    converter = AnnotationConverterFromCocoToAnnofab(coco_instances, CocoAnnotationType(args.coco_annotation_type), target_coco_category_names=args.coco_category_name)
+    input_data_id_to_task_id = create_input_data_id_to_task_id_mapping(args.af_task_json) if args.af_task_json is not None else None
+    input_data_name_to_input_data_id = create_input_data_name_to_input_data_id_mapping(args.af_input_data_json) if args.af_input_data_json is not None else None
+    converter = AnnotationConverterFromCocoToAnnofab(
+        coco_instances, CocoAnnotationType(args.coco_annotation_type), target_coco_category_names=args.coco_category_name, target_coco_image_file_names=args.coco_image_file_name
+    )
     converter.convert(args.output_dir, input_data_id_to_task_id=input_data_id_to_task_id, input_data_name_to_input_data_id=input_data_name_to_input_data_id)
 
 
