@@ -65,7 +65,8 @@ def convert_af_input_data_list_to_coco_images(af_input_data_list: list[dict[str,
     if len(duplicated_input_data_names) > 0:
         raise ValueError(f"Annofabの次のinput_data_nameは重複しています。この変換ツールではinput_data_nameで紐づけるため、input_data_nameは一意である必要があります。 :: {duplicated_input_data_names}")
 
-    coco_images = [convert_af_input_data_to_coco_image(af_input_data, coco_image_id=i) for i, af_input_data in enumerate(af_input_data_list)]
+    # coco_image_idは1始まりにする
+    coco_images = [convert_af_input_data_to_coco_image(af_input_data, coco_image_id=i + 1) for i, af_input_data in enumerate(af_input_data_list)]
     return coco_images
 
 
@@ -86,6 +87,7 @@ class AnnotationConverterFromAnnofabToCoco:
         Bounding BoxのAnnofabのdetail情報をCOCO形式に変換します。
         """
         annotation_id = af_detail["annotation_id"]
+        label = af_detail["label"]
         left_top = af_detail["data"]["left_top"].copy()
         right_bottom = af_detail["data"]["right_bottom"].copy()
         image_width = coco_image["width"]
@@ -105,7 +107,8 @@ class AnnotationConverterFromAnnofabToCoco:
             if new_left_top != left_top or new_right_bottom != right_bottom:
                 logger.debug(
                     f"bboxが画像からはみ出ていたため修正しました。 :: "
-                    f"task_id='{task_id}', input_data_id='{input_data_id}', annotation_id='{annotation_id}', coco_image_id='{coco_image_id}', coco_annotation_id='{coco_annotation_id}' :: "
+                    f"task_id='{task_id}', input_data_id='{input_data_id}', annotation_id='{annotation_id}', label='{label}', "
+                    f"coco_image_id='{coco_image_id}', coco_annotation_id='{coco_annotation_id}' :: "
                     f"original_left_top={original_left_top}, original_right_bottom={original_right_bottom}, "
                     f"new_left_top={new_left_top}, new_right_bottom={new_right_bottom}"
                 )
@@ -118,7 +121,7 @@ class AnnotationConverterFromAnnofabToCoco:
         return {
             "id": coco_annotation_id,
             "image_id": coco_image["id"],
-            "category_id": self.category_ids_by_name[af_detail["label"]],
+            "category_id": self.category_ids_by_name[label],
             "bbox": bbox,
             "segmentation": segmentation,
             "area": area,
@@ -220,7 +223,8 @@ class AnnotationConverterFromAnnofabToCoco:
 
 def create_parser() -> ArgumentParser:
     parser = ArgumentParser(
-        description="Annofab形式のアノテーションを、COCOデータセット（Instances）形式に変換します。",
+        description="Annofab形式のアノテーションを、COCOデータセット（Instances）形式に変換します。"
+        "Annofabのinput_data_nameはCOCOのimage.file_nameに、Annofabのラベル名(英語)はCOCOのcategory.nameに変換します。",
         parents=[create_parent_parser()],
     )
 
@@ -260,7 +264,7 @@ def create_parser() -> ArgumentParser:
     return parser
 
 
-@log_exception(logger=logger)
+@log_exception()
 def main() -> None:
     args = create_parser().parse_args()
     configure_loguru(is_verbose=args.verbose)
