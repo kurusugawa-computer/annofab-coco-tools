@@ -81,7 +81,7 @@ def main() -> None:
     if args.af_input_data_json is not None:
         af_input_data_id_list = create_input_data_id_list_from_input_data_json(args.af_input_data_json)
     elif args.af_input_data_id is not None:
-        af_input_data_id_list = [args.af_input_data_id]
+        af_input_data_id_list = args.af_input_data_id
     else:
         raise ValueError("`--af_input_data_json`か`--af_input_data_id`は必須です。")
 
