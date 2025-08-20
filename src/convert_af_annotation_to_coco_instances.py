@@ -9,6 +9,7 @@ from typing import Any
 from annofabapi.parser import lazy_parse_simple_annotation_dir, lazy_parse_simple_annotation_zip
 from jsonargparse import ArgumentParser
 from loguru import logger
+from shapely.geometry import Polygon
 
 from src.common.cli import create_parent_parser
 from src.common.utils import configure_loguru, log_exception
@@ -21,7 +22,7 @@ def clip_bounding_box_to_image(
     image_height: int,
 ) -> tuple[dict[str, int], dict[str, int]]:
     """
-    境界ボックス（bbox）が画像からはみ出ていないかチェックし、はみ出ていれば修正します。
+    Annofab形式のバウンディングボックスが画像からはみ出ていないかチェックし、はみ出ていれば修正します。
 
     Args:
         left_top: 左上座標（Annofab形式）
@@ -41,6 +42,32 @@ def clip_bounding_box_to_image(
         "y": min(right_bottom["y"], image_height),
     }
     return new_left_top, new_right_bottom
+
+
+def clip_polygon_to_image(
+    points: list[dict[str, int]],
+    image_width: int,
+    image_height: int,
+) -> list[dict[str, int]]:
+    """
+    Annofab形式のポリゴン画像からはみ出ていないかチェックし、はみ出ていれば修正します。
+
+    Args:
+        points: ポリゴンの頂点座標（Annofab形式）
+        image_width: 画像の幅
+        image_height: 画像の高さ
+
+    Returns:
+        修正後のポリゴンの頂点座標
+    """
+    clipped_points = []
+    for point in points:
+        clipped_point = {
+            "x": max(min(point["x"], image_width), 0),
+            "y": max(min(point["y"], image_height), 0),
+        }
+        clipped_points.append(clipped_point)
+    return clipped_points
 
 
 def convert_af_input_data_to_coco_image(af_input_data: dict[str, Any], coco_image_id: int) -> dict[str, Any]:
@@ -125,7 +152,50 @@ class AnnotationConverterFromAnnofabToCoco:
             "bbox": bbox,
             "segmentation": segmentation,
             "area": area,
-            # TODO 属性値から算出する
+            "iscrowd": 0,
+        }
+
+    def convert_af_polygon_detail(
+        self, af_detail: dict[str, Any], coco_image: dict[str, Any], coco_annotation_id: int, *, task_id: str | None = None, input_data_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        PolygonのAnnofabのdetail情報をCOCO形式に変換します。
+        """
+        annotation_id = af_detail["annotation_id"]
+        label = af_detail["label"]
+        points = af_detail["data"]["points"].copy()
+        image_width = coco_image["width"]
+        image_height = coco_image["height"]
+        coco_image_id = coco_image["id"]
+
+        if self.should_clip_annotation_to_image:
+            # polygonが画像からはみ出ていないかチェックし、はみ出ていれば修正
+            original_points = points
+            new_points = clip_polygon_to_image(
+                original_points,
+                image_width,
+                image_height,
+            )
+            if new_points != original_points:
+                logger.debug(
+                    f"polygonが画像からはみ出ていたため修正しました。 :: "
+                    f"task_id='{task_id}', input_data_id='{input_data_id}', annotation_id='{annotation_id}', label='{label}', "
+                    f"coco_image_id='{coco_image_id}', coco_annotation_id='{coco_annotation_id}' :: "
+                    f"original_points={original_points}, new_points={new_points}"
+                )
+            points = new_points
+
+        segmentation = [[v for p in points for v in (p["x"], p["y"])]]
+        polygon = Polygon([(p["x"], p["y"]) for p in points])
+        min_x, min_y, max_x, max_y = polygon.bounds
+        bbox = [min_x, min_y, max_x - min_x, max_y - min_y]
+        return {
+            "id": coco_annotation_id,
+            "image_id": coco_image["id"],
+            "category_id": self.category_ids_by_name[label],
+            "bbox": bbox,
+            "segmentation": segmentation,
+            "area": polygon.area,
             "iscrowd": 0,
         }
 
