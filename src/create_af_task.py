@@ -14,7 +14,7 @@ from src.common.utils import configure_loguru, log_exception
 
 
 def execute_annofabcli_task_put(project_id: str, json_info: dict[str, list[str]], temp_dir: Path) -> None:
-    json_file = temp_dir / f"{datetime.datetime.now().timestamp()}--task_info.json"  # noqa: DTZ005
+    json_file = temp_dir / f"{time.time()}--task_info.json"
     json_file.write_text(json.dumps(json_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
     logger.info(f"{len(json_info)}件のタスクをAnnofabに登録します。 :: project_id='{project_id}'")
