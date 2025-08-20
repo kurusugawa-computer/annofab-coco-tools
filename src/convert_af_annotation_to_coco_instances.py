@@ -5,8 +5,8 @@ import zipfile
 from collections.abc import Collection
 from pathlib import Path
 from typing import Any
-
-from annofabapi.parser import lazy_parse_simple_annotation_dir, lazy_parse_simple_annotation_zip
+from annofabapi.segmentation import read_binary_image
+from annofabapi.parser import lazy_parse_simple_annotation_dir, lazy_parse_simple_annotation_zip, SimpleAnnotationParser
 from jsonargparse import ArgumentParser
 from loguru import logger
 from shapely.geometry import Polygon
@@ -113,6 +113,7 @@ class AnnotationConverterFromAnnofabToCoco:
         """
         Bounding BoxのAnnofabのdetail情報をCOCO形式に変換します。
         """
+        assert af_detail["data"]["_type"] == "BoundingBox"
         annotation_id = af_detail["annotation_id"]
         label = af_detail["label"]
         left_top = af_detail["data"]["left_top"].copy()
@@ -161,6 +162,7 @@ class AnnotationConverterFromAnnofabToCoco:
         """
         PolygonのAnnofabのdetail情報をCOCO形式に変換します。
         """
+        assert af_detail["data"]["_type"] == "Points"
         annotation_id = af_detail["annotation_id"]
         label = af_detail["label"]
         points = af_detail["data"]["points"].copy()
@@ -184,6 +186,39 @@ class AnnotationConverterFromAnnofabToCoco:
                     f"original_points={original_points}, new_points={new_points}"
                 )
             points = new_points
+
+        segmentation = [[v for p in points for v in (p["x"], p["y"])]]
+        polygon = Polygon([(p["x"], p["y"]) for p in points])
+        min_x, min_y, max_x, max_y = polygon.bounds
+        bbox = [min_x, min_y, max_x - min_x, max_y - min_y]
+        return {
+            "id": coco_annotation_id,
+            "image_id": coco_image["id"],
+            "category_id": self.category_ids_by_name[label],
+            "bbox": bbox,
+            "segmentation": segmentation,
+            "area": polygon.area,
+            "iscrowd": 0,
+        }
+
+
+
+    def convert_af_segmentation_detail(
+        self, af_detail: dict[str, Any], coco_image: dict[str, Any], coco_annotation_id: int, parser: SimpleAnnotationParser, *, task_id: str | None = None, input_data_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Annofabの塗りつぶしアノテーションのdetail情報をCOCO形式に変換します。
+        """
+        assert af_detail["data"]["_type"] == "Segmentation"
+        annotation_id = af_detail["annotation_id"]
+        label = af_detail["label"]
+        points = af_detail["data"]["points"].copy()
+        image_width = coco_image["width"]
+        image_height = coco_image["height"]
+        coco_image_id = coco_image["id"]
+
+        with parser.open_outer_file(af_detail["data"]["outer_file_name"]) as f:
+            binary_segmentation_array = read_binary_image(f)
 
         segmentation = [[v for p in points for v in (p["x"], p["y"])]]
         polygon = Polygon([(p["x"], p["y"]) for p in points])
