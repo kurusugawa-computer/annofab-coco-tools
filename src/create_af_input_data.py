@@ -14,7 +14,7 @@ from src.common.utils import configure_loguru, log_exception
 
 
 def execute_annofabcli_input_data_put(project_id: str, json_info: list[dict[str, Any]], temp_dir: Path) -> None:
-    json_file = temp_dir / f"{datetime.datetime.now().timestamp()}--input_data_info.json"  # noqa: DTZ005
+    json_file = temp_dir / f"{time.time()}--input_data_info.json"
     json_file.write_text(json.dumps(json_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
     command = ["annofabcli", "input_data", "put", "--yes", "--project_id", project_id, "--json", f"file://{json_file!s}", "--parallelism", "4"]
