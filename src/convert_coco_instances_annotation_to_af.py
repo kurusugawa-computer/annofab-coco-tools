@@ -3,7 +3,6 @@ import json
 import subprocess
 import sys
 import uuid
-from jsonargparse import ArgumentParser
 from collections.abc import Collection
 from enum import Enum
 from pathlib import Path
@@ -13,6 +12,7 @@ import numpy
 import pycocotools
 import pycocotools.mask
 from annofabapi.segmentation import write_binary_image
+from jsonargparse import ArgumentParser
 from loguru import logger
 
 from src.common.cli import create_parent_parser
@@ -26,9 +26,11 @@ class CocoAnnotationType(Enum):
 
 
 def convert_coco_one_segmentation_to_af_format(polygon_segmentation: list[float]) -> dict[str, Any]:
-    """ """
-    # COCO形式の1個のアノテーションの`segmentation`をAnnofab形式のポリゴンに変換します。
-    return {"points": [{"x": polygon_segmentation[i], "y": polygon_segmentation[i + 1]} for i in range(0, len(polygon_segmentation), 2)], "_type": "Polygon"}
+    """
+    COCO形式の1個のアノテーションの`segmentation`をAnnofab形式のポリゴンに変換します。
+    """
+    # Annofabは座標値は整数で格納しているので、round()で整数に変換する。
+    return {"points": [{"x": round(polygon_segmentation[i]), "y": round(polygon_segmentation[i + 1])} for i in range(0, len(polygon_segmentation), 2)], "_type": "Points"}
 
 
 class AnnotationConverterFromCocoToAnnofab:
@@ -58,9 +60,11 @@ class AnnotationConverterFromCocoToAnnofab:
 
         attributes = {
             "coco.annotation_id": coco_annotation["id"],
+            "coco.image_id": coco_annotation["image_id"],
         }
         left_top_x, left_top_y, width, height = coco_annotation["bbox"]
-        data = {"left_top": {"x": left_top_x, "y": left_top_y}, "right_bottom": {"x": left_top_x + width, "y": left_top_y + height}, "_type": "BoundingBox"}
+        # Annofabは座標値は整数で格納しているので、round()で整数に変換する。
+        data = {"left_top": {"x": round(left_top_x), "y": round(left_top_y)}, "right_bottom": {"x": round(left_top_x + width), "y": round(left_top_y + height)}, "_type": "BoundingBox"}
         return {"annotation_id": str(uuid.uuid4()), "label": coco_category_name, "attributes": attributes, "data": data}
 
     def convert_polygon_segmentation_annotation_to_af_detail(self, coco_annotation: dict[str, Any]) -> list[dict[str, Any]]:
@@ -170,7 +174,7 @@ class AnnotationConverterFromCocoToAnnofab:
         success_image_count = 0
         success_annotation_count = 0
         logger.info(f"COCOデータセットの{len(self.coco_images)}件のimagesに紐づくアノテーションを、Annofab形式に変換します。")
-        
+
         for image_index, coco_image in enumerate(self.coco_images):
             if (image_index + 1) % 1000 == 0:
                 logger.info(f"{image_index + 1}件目のCOCO imagesに紐づくアノテーションを、Annofabフォーマットに変換中...")
@@ -202,7 +206,9 @@ class AnnotationConverterFromCocoToAnnofab:
                 logger.opt(exception=True).warning(f"COCOのimage.file_name='{image_file_name}'に紐づくアノテーションを、Annofabフォーマットへ変換するのに失敗しました。")
                 continue
 
-        logger.info(f"{success_image_count}/{len(self.coco_images)}件のCOCOデータセットimagesに紐づくアノテーション{success_annotation_count}件を、Annofabフォーマットに変換しました。 :: output_dir='{output_dir}'")
+        logger.info(
+            f"{success_image_count}/{len(self.coco_images)}件のCOCOデータセットimagesに紐づくアノテーション{success_annotation_count}件を、Annofabフォーマットに変換しました。 :: output_dir='{output_dir}'"
+        )
 
 
 def create_input_data_id_to_task_id_mapping(task_json: Path) -> dict[str, str]:
