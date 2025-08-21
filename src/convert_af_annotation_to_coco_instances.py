@@ -19,6 +19,50 @@ from src.common.cli import create_parent_parser
 from src.common.utils import configure_loguru, log_exception
 
 
+
+def get_rle_from_boolean_segmentation_array(boolean_segmentation_array: numpy.ndarray, is_compressed:bool) -> dict[str , Any]:
+    """
+    booleanのセグメンテーションのnumpy arrayから、RLE形式の辞書を取得します。
+    
+    Args:
+        boolean_segmentation_array: 2D boolean numpy array
+        is_compressed: Whether to return compressed RLE or uncompressed RLE
+
+    Returns:
+        RLE形式の辞書
+        
+    """
+    width, height = boolean_segmentation_array.shape
+
+    # `pycocotools.mask.encode`は"Fortran contiguous"でないと動作しないので、転置して"Fortran contiguous"にしてからエンコードする
+    uint8_segmentation_array = numpy.asfortranarray( boolean_segmentation_array.astype(numpy.uint8).T)
+
+    if is_compressed:
+        # Uncompressed RLE形式に変換する
+        rle_compressed = pycocotools.mask.encode(numpy.asfortranarray(uint8_segmentation_array.T))
+        # "counts"はbytesなので、strに変換する
+        return {"size": rle_compressed["size"], "counts": rle_compressed["counts"].decode("latin1")}
+    else:
+        rle_uncompressed = {
+            "size": [height, width],
+            "counts": []
+        }
+        # run-length counting
+        prev = 0
+        cnt = 0
+        for v in uint8_segmentation_array.flatten():
+            if v == prev:
+                cnt += 1
+            else:
+                rle_uncompressed["counts"].append(cnt)
+                cnt = 1
+                prev = v
+        rle_uncompressed["counts"].append(cnt)
+        return rle_uncompressed
+        
+
+
+
 def clip_bounding_box_to_image(
     left_top: dict[str, int],
     right_bottom: dict[str, int],
@@ -214,21 +258,18 @@ class AnnotationConverterFromAnnofabToCoco:
         label = af_detail["label"]
 
         with af_parser.open_outer_file(annotation_id) as f:
-            binary_segmentation_array = read_binary_image(f)
-        int_segmentation_array = binary_segmentation_array.astype(int)
+            boolean_segmentation_array = read_binary_image(f)
 
-        # Uncompressed RLE形式に変換する
-        # `pycocotools.mask.encode`は"Fortran contiguous"でないと動作しないので、転置して"Fortran contiguous"にしてからエンコードする
-        rle_compressed = pycocotools.mask.encode(numpy.asfortranarray(int_segmentation_array.T))
-
+        rle = get_rle_from_boolean_segmentation_array(boolean_segmentation_array, is_compressed=True)
         return {
             "id": coco_annotation_id,
             "image_id": coco_image["id"],
             "category_id": self.category_ids_by_name[label],
-            "bbox": pycocotools.mask.toBbox(rle_compressed).tolist(),
-            "segmentation": rle_compressed,
-            "area": float(pycocotools.mask.area(rle_compressed)),
-            "iscrowd": 0,
+            "bbox": pycocotools.mask.toBbox(rle).tolist(),
+            "segmentation": rle,
+            "area": float(pycocotools.mask.area(rle)),
+            # COCOのフォーマットに従い、RLE形式のときはiscrowdは1にする
+            "iscrowd": 1,
         }
 
     def convert_af_annotation(self, af_annotation: dict[str, Any], af_parser: SimpleAnnotationParser, coco_image: dict[str, Any], coco_start_annotation_id: int) -> tuple[list[dict[str, Any]], int]:
