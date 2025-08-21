@@ -3,6 +3,7 @@ import json
 import sys
 import zipfile
 from collections.abc import Collection
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -19,23 +20,27 @@ from src.common.cli import create_parent_parser
 from src.common.utils import configure_loguru, log_exception
 
 
+class RleFormat(Enum):
+    UNCOMPRESSED = "uncompressed"
+    COMPRESSED = "compressed"
 
-def get_rle_from_boolean_segmentation_array(boolean_segmentation_array: numpy.ndarray, is_compressed:bool) -> dict[str , Any]:
+
+def get_rle_from_boolean_segmentation_array(boolean_segmentation_array: numpy.ndarray, *, is_compressed: bool) -> dict[str, Any]:
     """
     booleanのセグメンテーションのnumpy arrayから、RLE形式の辞書を取得します。
-    
+
     Args:
         boolean_segmentation_array: 2D boolean numpy array
         is_compressed: Whether to return compressed RLE or uncompressed RLE
 
     Returns:
         RLE形式の辞書
-        
+
     """
     width, height = boolean_segmentation_array.shape
 
     # `pycocotools.mask.encode`は"Fortran contiguous"でないと動作しないので、転置して"Fortran contiguous"にしてからエンコードする
-    uint8_segmentation_array = numpy.asfortranarray( boolean_segmentation_array.astype(numpy.uint8).T)
+    uint8_segmentation_array = numpy.asfortranarray(boolean_segmentation_array.astype(numpy.uint8).T)
 
     if is_compressed:
         # Uncompressed RLE形式に変換する
@@ -43,10 +48,7 @@ def get_rle_from_boolean_segmentation_array(boolean_segmentation_array: numpy.nd
         # "counts"はbytesなので、strに変換する
         return {"size": rle_compressed["size"], "counts": rle_compressed["counts"].decode("latin1")}
     else:
-        rle_uncompressed = {
-            "size": [height, width],
-            "counts": []
-        }
+        rle_uncompressed = {"size": [height, width], "counts": []}
         # run-length counting
         prev = 0
         cnt = 0
@@ -59,8 +61,6 @@ def get_rle_from_boolean_segmentation_array(boolean_segmentation_array: numpy.nd
                 prev = v
         rle_uncompressed["counts"].append(cnt)
         return rle_uncompressed
-        
-
 
 
 def clip_bounding_box_to_image(
@@ -147,11 +147,18 @@ def convert_af_input_data_list_to_coco_images(af_input_data_list: list[dict[str,
 
 class AnnotationConverterFromAnnofabToCoco:
     def __init__(
-        self, coco_categories: list[dict[str, Any]], coco_images: list[dict[str, Any]], *, target_af_target_labels: Collection[str] | None = None, should_clip_annotation_to_image: bool = False
+        self,
+        coco_categories: list[dict[str, Any]],
+        coco_images: list[dict[str, Any]],
+        *,
+        target_af_target_labels: Collection[str] | None = None,
+        should_clip_annotation_to_image: bool = False,
+        rle_format: RleFormat = RleFormat.COMPRESSED,
     ) -> None:
         self.category_ids_by_name: dict[str, int] = {category["name"]: category["id"] for category in coco_categories}
         self.images_by_file_name: dict[str, dict[str, Any]] = {image["file_name"]: image for image in coco_images}
         self.should_clip_annotation_to_image = should_clip_annotation_to_image
+        self.rle_format = rle_format
 
         self.target_af_target_labels = set(target_af_target_labels) if target_af_target_labels is not None else None
 
@@ -260,7 +267,7 @@ class AnnotationConverterFromAnnofabToCoco:
         with af_parser.open_outer_file(annotation_id) as f:
             boolean_segmentation_array = read_binary_image(f)
 
-        rle = get_rle_from_boolean_segmentation_array(boolean_segmentation_array, is_compressed=True)
+        rle = get_rle_from_boolean_segmentation_array(boolean_segmentation_array, is_compressed=self.rle_format == RleFormat.COMPRESSED)
         return {
             "id": coco_annotation_id,
             "image_id": coco_image["id"],
@@ -411,6 +418,7 @@ def create_parser() -> ArgumentParser:
     parser.add_argument("--af_task_phase", type=str, help="変換対象のAnnofabのタスクのフェーズ")
     parser.add_argument("--af_task_status", type=str, help="変換対象のAnnofabのタスクのステータス")
 
+    parser.add_argument("--rle_format", choices=[e.value for e in RleFormat], default=RleFormat.COMPRESSED.value, help="RLE形式の圧縮方法")
     return parser
 
 
@@ -436,6 +444,7 @@ def main() -> None:
         coco_images=coco_images,
         target_af_target_labels=args.af_label_name,
         should_clip_annotation_to_image=args.clip_annotation_to_image,
+        rle_format=RleFormat(args.rle_format),
     )
 
     coco_annotations = converter.convert_af_annotation_path(
