@@ -30,21 +30,21 @@ def get_rle_from_boolean_segmentation_array(boolean_segmentation_array: numpy.nd
     booleanのセグメンテーションのnumpy arrayから、RLE形式の辞書を取得します。
 
     Args:
-        boolean_segmentation_array: 2D boolean numpy array
+        boolean_segmentation_array: 2D boolean numpy array(shape=(height, width))
         is_compressed: Whether to return compressed RLE or uncompressed RLE
 
     Returns:
         RLE形式の辞書
 
     """
-    width, height = boolean_segmentation_array.shape
+    height, width = boolean_segmentation_array.shape
 
     # `pycocotools.mask.encode`は"Fortran contiguous"でないと動作しないので、転置して"Fortran contiguous"にしてからエンコードする
-    uint8_segmentation_array = numpy.asfortranarray(boolean_segmentation_array.astype(numpy.uint8).T)
+    uint8_segmentation_array = numpy.asfortranarray(boolean_segmentation_array.astype(numpy.uint8))
 
     if is_compressed:
         # Uncompressed RLE形式に変換する
-        rle_compressed = pycocotools.mask.encode(numpy.asfortranarray(uint8_segmentation_array.T))
+        rle_compressed = pycocotools.mask.encode(numpy.asfortranarray(uint8_segmentation_array))
         # "counts"はbytesなので、strに変換する
         return {"size": rle_compressed["size"], "counts": rle_compressed["counts"].decode("latin1")}
     else:
@@ -52,7 +52,7 @@ def get_rle_from_boolean_segmentation_array(boolean_segmentation_array: numpy.nd
         # run-length counting
         prev = 0
         cnt = 0
-        for v in uint8_segmentation_array.flatten():
+        for v in uint8_segmentation_array.flatten(order="F"):
             if v == prev:
                 cnt += 1
             else:
@@ -268,13 +268,16 @@ class AnnotationConverterFromAnnofabToCoco:
             boolean_segmentation_array = read_binary_image(f)
 
         rle = get_rle_from_boolean_segmentation_array(boolean_segmentation_array, is_compressed=self.rle_format == RleFormat.COMPRESSED)
+        if self.rle_format == RleFormat.UNCOMPRESSED:
+            rle_compressed = get_rle_from_boolean_segmentation_array(boolean_segmentation_array, is_compressed=True)
+
         return {
             "id": coco_annotation_id,
             "image_id": coco_image["id"],
             "category_id": self.category_ids_by_name[label],
-            "bbox": pycocotools.mask.toBbox(rle).tolist(),
+            "bbox": pycocotools.mask.toBbox(rle_compressed).tolist(),
             "segmentation": rle,
-            "area": float(pycocotools.mask.area(rle)),
+            "area": float(pycocotools.mask.area(rle_compressed)),
             # COCOのフォーマットに従い、RLE形式のときはiscrowdは1にする
             "iscrowd": 1,
         }
