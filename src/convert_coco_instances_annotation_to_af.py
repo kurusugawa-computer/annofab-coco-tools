@@ -246,7 +246,7 @@ class AnnotationConverterFromCocoToAnnofab:
         )
 
 
-def create_input_data_id_to_task_id_mapping(task_json: Path) -> dict[str, str]:
+def create_input_data_id_to_task_id_mapping(task_list: list[dict[str, Any]]) -> dict[str, str]:
     """
     Annofabのタスク全件ファイルから、input_data_idとtask_idのマッピングを作成します。
 
@@ -256,9 +256,8 @@ def create_input_data_id_to_task_id_mapping(task_json: Path) -> dict[str, str]:
     Raises:
         ValueError: 1個の入力データが複数のタスクから参照されている
     """
-    task_data = json.loads(task_json.read_text())
     result = {}
-    for task in task_data:
+    for task in task_list:
         for input_data_id in task["input_data_id_list"]:
             task_id = task["task_id"]
             if input_data_id in result:
@@ -268,7 +267,7 @@ def create_input_data_id_to_task_id_mapping(task_json: Path) -> dict[str, str]:
     return result
 
 
-def create_input_data_name_to_input_data_id_mapping(input_data_json: Path) -> dict[str, str]:
+def create_input_data_name_to_input_data_id_mapping(input_data_list: list[dict[str, Any]]) -> dict[str, str]:
     """
     Annofabの入力データ全件ファイルから、input_data_nameからinput_data_idのマッピングを作成します。
 
@@ -278,9 +277,8 @@ def create_input_data_name_to_input_data_id_mapping(input_data_json: Path) -> di
     Raises:
         ValueError: 1個の入力データが複数のタスクから参照されている
     """
-    input_data = json.loads(input_data_json.read_text())
     result = {}
-    for item in input_data:
+    for item in input_data_list:
         input_data_name = item["input_data_name"]
         input_data_id = item["input_data_id"]
         if input_data_name in result:
@@ -347,8 +345,8 @@ def main() -> None:
 
     coco_instances = json.loads(args.coco_instances_json.read_text())
 
-    input_data_id_to_task_id = create_input_data_id_to_task_id_mapping(args.af_task_json) if args.af_task_json is not None else None
-    input_data_name_to_input_data_id = create_input_data_name_to_input_data_id_mapping(args.af_input_data_json) if args.af_input_data_json is not None else None
+    input_data_id_to_task_id = create_input_data_id_to_task_id_mapping(json.loads(args.af_task_json.read_text())) if args.af_task_json is not None else None
+    input_data_name_to_input_data_id = create_input_data_name_to_input_data_id_mapping(json.loads(args.af_input_data_json.read_text())) if args.af_input_data_json is not None else None
     converter = AnnotationConverterFromCocoToAnnofab(
         coco_instances, CocoAnnotationType(args.coco_annotation_type), target_coco_category_names=args.coco_category_name, target_coco_image_file_names=args.coco_image_file_name
     )
