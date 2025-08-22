@@ -2,7 +2,6 @@ import numpy as np
 
 from src.convert_af_annotation_to_coco_instances import (
     AnnotationConverterFromAnnofabToCoco,
-    RleFormat,
     clip_bounding_box_to_image,
     clip_polygon_to_image,
     get_rle_from_boolean_segmentation_array,
@@ -131,7 +130,6 @@ class TestAnnotationConverterFromAnnofabToCoco:
             coco_images=coco_images,
             target_af_target_labels=["label1"],
             should_clip_annotation_to_image=True,
-            rle_format=RleFormat.COMPRESSED,
         )
 
         # インスタンス変数の検証
@@ -142,7 +140,6 @@ class TestAnnotationConverterFromAnnofabToCoco:
         }
         assert converter.target_af_target_labels == {"label1"}
         assert converter.should_clip_annotation_to_image is True
-        assert converter.rle_format == RleFormat.COMPRESSED
 
     def test_convert_af_bounding_box_detail(self):
         """バウンディングボックスの変換テスト"""
@@ -242,7 +239,7 @@ class TestGetRleFromBooleanSegmentationArray:
             dtype=bool,
         )
 
-        rle = get_rle_from_boolean_segmentation_array(segmentation_array, is_compressed=False)
+        rle = get_rle_from_boolean_segmentation_array(segmentation_array)
 
         # 結果の検証
         assert rle["size"] == [2, 3]  # [height, width]
@@ -250,34 +247,11 @@ class TestGetRleFromBooleanSegmentationArray:
         # 最初のFalseが1個、次にTrueが3個、Falseが2個
         assert rle["counts"] == [1, 3, 2]
 
-    def test_get_rle_compressed(self):
-        """圧縮RLE形式に変換するテスト"""
-        # 2x3の2次元配列を作成（heightが2, widthが3）
-        segmentation_array = np.array(
-            [
-                [False, True, False],
-                [False, False, True],
-            ],
-            dtype=bool,
-        )
-
-        rle = get_rle_from_boolean_segmentation_array(segmentation_array, is_compressed=True)
-
-        # 圧縮RLE形式は、pycocotools.mask.encodeの仕様に依存するため、
-        # サイズだけを確認する
-        assert rle["size"] == [2, 3]  # [height, width]
-        assert isinstance(rle["counts"], str)  # countsはstr型であることを確認
-
     def test_empty_array(self):
         """空の配列のテスト"""
         segmentation_array = np.zeros((2, 3), dtype=bool)  # heightが2, widthが3
 
         # 非圧縮RLE
-        rle_uncompressed = get_rle_from_boolean_segmentation_array(segmentation_array, is_compressed=False)
+        rle_uncompressed = get_rle_from_boolean_segmentation_array(segmentation_array)
         assert rle_uncompressed["size"] == [2, 3]
         assert rle_uncompressed["counts"][0] == 6  # すべてFalseなので、最初のcountは2x3=6
-
-        # 圧縮RLE
-        rle_compressed = get_rle_from_boolean_segmentation_array(segmentation_array, is_compressed=True)
-        assert rle_compressed["size"] == [2, 3]
-        assert isinstance(rle_compressed["counts"], str)
