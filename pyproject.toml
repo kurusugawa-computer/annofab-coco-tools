@@ -96,6 +96,7 @@ select = [
     "PTH", # flake8-use-pathlib
     "SLF", # flake8-self
     "PLC2401", # non-ascii-name: メソッド名に日本語を使うため
+    "PT011", # pytest-raises-too-broad: `with pytest.raises(ValueError)`など`match`引数を使わずに確認するため
 ]
 
 

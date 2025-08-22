@@ -213,6 +213,7 @@ class TestAnnotationConverterFromCocoToAnnofab:
 
 class TestConvertRLESegmentation:
     """RLEセグメンテーションの変換テスト"""
+
     coco_instances: dict[str, Any]
     converter: AnnotationConverterFromCocoToAnnofab
 
