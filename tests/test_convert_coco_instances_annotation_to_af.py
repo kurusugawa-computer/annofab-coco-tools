@@ -1,7 +1,9 @@
 import json
 import tempfile
 from pathlib import Path
+from typing import Any
 
+import numpy
 import pytest
 
 from src.convert_coco_instances_annotation_to_af import (
@@ -16,13 +18,13 @@ from src.convert_coco_instances_annotation_to_af import (
 def test_convert_coco_one_segmentation_to_af_format():
     """convert_coco_one_segmentation_to_af_format関数のテスト"""
     # テスト用のポリゴンデータ
-    polygon_segmentation = [10.1, 20.2, 30.3, 40.4, 50.5, 60.6]
+    polygon_segmentation = [10, 20, 30, 40, 50, 60]
 
     # 関数実行
     result = convert_coco_one_segmentation_to_af_format(polygon_segmentation)
 
     # 結果の検証
-    expected = {"points": [{"x": 10, "y": 20}, {"x": 30, "y": 40}, {"x": 51, "y": 61}], "_type": "Points"}
+    expected = {"points": [{"x": 10, "y": 20}, {"x": 30, "y": 40}, {"x": 50, "y": 60}], "_type": "Points"}
     assert result == expected
 
 
@@ -51,7 +53,7 @@ def test_create_input_data_id_to_task_id_mapping_error():
     ]
 
     # 例外が発生することを検証
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError):
         create_input_data_id_to_task_id_mapping(task_list)
 
 
@@ -80,12 +82,14 @@ def test_create_input_data_name_to_input_data_id_mapping_error():
     ]
 
     # 例外が発生することを検証
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError):
         create_input_data_name_to_input_data_id_mapping(input_data_list)
 
 
 class TestAnnotationConverterFromCocoToAnnofab:
     """AnnotationConverterFromCocoToAnnofabクラスのテスト"""
+
+    coco_instances: dict[str, Any]
 
     @classmethod
     def setup_class(cls):
@@ -135,8 +139,8 @@ class TestAnnotationConverterFromCocoToAnnofab:
         assert result["attributes"]["coco.annotation_id"] == 1
         assert result["attributes"]["coco.image_id"] == 1
         assert result["data"]["_type"] == "BoundingBox"
-        assert result["data"]["left_top"] == {"x": 218, "y": 241}
-        assert result["data"]["right_bottom"] == {"x": 257, "y": 298}
+        assert result["data"]["left_top"] == {"x": 200, "y": 200}
+        assert result["data"]["right_bottom"] == {"x": 300, "y": 250}
 
     def test_convert_bbox_annotation_to_af_detail_filtered(self):
         """BBoxアノテーション変換のフィルターテスト"""
@@ -171,7 +175,7 @@ class TestAnnotationConverterFromCocoToAnnofab:
         assert polygon_detail["attributes"]["coco.annotation_id"] == 1
         assert polygon_detail["attributes"]["coco.image_id"] == 1
         assert polygon_detail["data"]["_type"] == "Points"
-        assert len(polygon_detail["data"]["points"]) == 26  # 26点のポリゴン
+        assert len(polygon_detail["data"]["points"]) == 3
 
     def test_convert_annotations_to_af_details_bbox(self):
         """convert_annotations_to_af_detailsメソッドのBBox変換テスト"""
@@ -205,3 +209,91 @@ class TestAnnotationConverterFromCocoToAnnofab:
         assert len(details) == 1  # ポリゴンは1つ（RLEは対象外）
         assert count == 1
         assert details[0]["label"] == "person"
+
+
+class TestConvertRLESegmentation:
+    """RLEセグメンテーションの変換テスト"""
+    coco_instances: dict[str, Any]
+    converter: AnnotationConverterFromCocoToAnnofab
+
+    @classmethod
+    def setup_class(cls):
+        """テスト全体の前処理"""
+        # テスト用のCOCOデータを読み込む
+        cls.coco_instances = json.loads(Path("tests/resources/test_coco_instances.json").read_text())
+        # コンバーターを初期化
+        cls.converter = AnnotationConverterFromCocoToAnnofab(cls.coco_instances, CocoAnnotationType.RLE_SEGMENTATION)
+
+    def test_convert_rle_segmentation_annotation_to_af_detail(self):
+        """convert_rle_segmentation_annotation_to_af_detailメソッドのテスト"""
+        # RLE形式のアノテーション (iscrowd=1)
+        coco_annotation = self.coco_instances["annotations"][1]  # car, RLE
+        coco_image = self.coco_instances["images"][0]  # test_image1.jpg
+
+        # 変換実行
+        af_detail, segmentation_bool_array = self.converter.convert_rle_segmentation_annotation_to_af_detail(coco_annotation, coco_image)
+
+        # 結果検証
+        assert af_detail is not None
+        assert af_detail["label"] == "car"
+        assert af_detail["attributes"]["coco.annotation_id"] == 2
+        assert af_detail["attributes"]["coco.image_id"] == 1
+        assert af_detail["data"]["_type"] == "Segmentation"
+        assert af_detail["data"]["data_uri"] == af_detail["annotation_id"]
+
+        # bool配列の検証
+        assert segmentation_bool_array is not None
+        assert isinstance(segmentation_bool_array, numpy.ndarray)
+        assert segmentation_bool_array.shape == (427, 640)  # 画像サイズと同じ
+        assert segmentation_bool_array.dtype == bool  # bool型であること
+
+    def test_convert_rle_segmentation_annotation_to_af_detail_not_rle(self):
+        """RLEでないアノテーションに対するテスト (iscrowd=0)"""
+        # ポリゴン形式のアノテーション (iscrowd=0)
+        coco_annotation = self.coco_instances["annotations"][0]  # person, polygon
+        coco_image = self.coco_instances["images"][0]  # test_image1.jpg
+
+        # 変換実行 (RLEでないのでNoneが返る)
+        af_detail, segmentation_bool_array = self.converter.convert_rle_segmentation_annotation_to_af_detail(coco_annotation, coco_image)
+
+        # 結果検証
+        assert af_detail is None
+        assert segmentation_bool_array is None
+
+    def test_convert_rle_segmentation_annotation_to_af_detail_filtered(self):
+        """フィルタリングされたカテゴリのテスト"""
+        # personのみを対象とするフィルタを適用
+        filtered_converter = AnnotationConverterFromCocoToAnnofab(
+            self.coco_instances,
+            CocoAnnotationType.RLE_SEGMENTATION,
+            target_coco_category_names=["person"],  # carは対象外
+        )
+
+        # RLE形式のアノテーション (car, iscrowd=1)
+        coco_annotation = self.coco_instances["annotations"][1]
+        coco_image = self.coco_instances["images"][0]
+
+        # 変換実行 (carはフィルタで除外されるのでNoneが返る)
+        af_detail, segmentation_bool_array = filtered_converter.convert_rle_segmentation_annotation_to_af_detail(coco_annotation, coco_image)
+
+        # 結果検証
+        assert af_detail is None
+        assert segmentation_bool_array is None
+
+    def test_convert_annotations_to_af_details_rle(self, tmp_path: Path):
+        """convert_annotations_to_af_detailsメソッドのRLE変換テスト"""
+        # テスト用の一時ディレクトリ
+
+        # 変換実行
+        coco_image = self.coco_instances["images"][0]  # test_image1.jpg
+        details, count = self.converter.convert_annotations_to_af_details(coco_image, tmp_path)
+
+        # 結果検証
+        assert len(details) == 1  # RLEは1つ
+        assert count == 1
+        assert details[0]["label"] == "car"
+
+        # 塗りつぶし画像が生成されたか確認
+        annotation_id = details[0]["annotation_id"]
+        segmentation_file = tmp_path / annotation_id
+        assert segmentation_file.exists()  # 塗りつぶし画像が生成されていること

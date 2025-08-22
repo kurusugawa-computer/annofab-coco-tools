@@ -2,7 +2,7 @@ import collections
 import json
 import sys
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from enum import Enum
 from pathlib import Path
 from typing import Any, assert_never
@@ -24,7 +24,7 @@ class CocoAnnotationType(Enum):
     RLE_SEGMENTATION = "rle_segmentation"
 
 
-def convert_coco_one_segmentation_to_af_format(polygon_segmentation: list[float]) -> dict[str, Any]:
+def convert_coco_one_segmentation_to_af_format(polygon_segmentation: Sequence[float]) -> dict[str, Any]:
     """
     COCO形式の1個のアノテーションの`segmentation`をAnnofab形式のポリゴンに変換します。
     """

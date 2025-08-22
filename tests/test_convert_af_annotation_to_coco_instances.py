@@ -1,4 +1,3 @@
-
 import numpy as np
 
 from src.convert_af_annotation_to_coco_instances import (
@@ -42,7 +41,6 @@ class TestGetRleFromBooleanSegmentationArray:
         # 圧縮RLE形式は、pycocotools.mask.encodeの仕様に依存するため、
         # サイズだけを確認する
         assert rle["size"] == [2, 3]  # [height, width]
-        print(rle)
         assert isinstance(rle["counts"], str)  # countsはstr型であることを確認
 
     def test_empty_array(self):

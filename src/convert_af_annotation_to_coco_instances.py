@@ -58,7 +58,7 @@ def get_rle_from_boolean_segmentation_array(boolean_segmentation_array: numpy.nd
             else:
                 rle_uncompressed["counts"].append(cnt)
                 cnt = 1
-                prev = v
+                prev = v  # type: ignore[assignment]
         rle_uncompressed["counts"].append(cnt)
         return rle_uncompressed
 
