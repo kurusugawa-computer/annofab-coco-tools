@@ -1,0 +1,10 @@
+以下のファイルには、COCO データセットのアノテーションの一部が含まれています。
+* `coco_instances.json`
+
+
+出典: https://cocodataset.org
+ライセンス: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+著作権表示: © 2014–2017 Microsoft COCO Consortium
+
+注記: このサブセットはテスト目的で抽出したものであり、
+元の画像データは含まれていません。

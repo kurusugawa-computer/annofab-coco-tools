@@ -23,6 +23,8 @@
 ### Python
 * できるだけ型ヒントを付ける
 * docstringはGoogleスタイル
+* dictから値を取得する際、必須なキーならばブラケット記法を使う。キーが必須がどうか分からない場合は、必須とみなす。
+* できるだけ`os.path`でなく`pathlib.Path`を使う（Lint`flake8-use-pathlib`に従う）
 
 ### テストコード
 * Errorの確認は、`pytest.raises`を使用する。エラーメッセージの確認は行わない。
