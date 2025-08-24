@@ -6,12 +6,46 @@ from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
-from annofabapi.parser import lazy_parse_simple_annotation_dir, lazy_parse_simple_annotation_zip
+import numpy
+import pycocotools
+import pycocotools.mask
+from annofabapi.parser import SimpleAnnotationParser, lazy_parse_simple_annotation_dir, lazy_parse_simple_annotation_zip
+from annofabapi.segmentation import read_binary_image
 from jsonargparse import ArgumentParser
 from loguru import logger
+from shapely.geometry import Polygon
 
 from src.common.cli import create_parent_parser
 from src.common.utils import configure_loguru, log_exception
+
+
+def get_rle_from_boolean_segmentation_array(boolean_segmentation_array: numpy.ndarray) -> dict[str, Any]:
+    """
+    booleanのセグメンテーションのnumpy arrayから、RLE形式(Uncompressed)の辞書を取得します。
+
+    Args:
+        boolean_segmentation_array: 2D boolean numpy array(shape=(height, width))
+
+    Returns:
+        RLE形式の辞書
+
+    """
+    height, width = boolean_segmentation_array.shape
+    uint8_segmentation_array = boolean_segmentation_array.astype(numpy.uint8)
+
+    rle_uncompressed = {"size": [height, width], "counts": []}
+    # run-length counting
+    prev = 0
+    cnt = 0
+    for v in uint8_segmentation_array.flatten(order="F"):
+        if v == prev:
+            cnt += 1
+        else:
+            rle_uncompressed["counts"].append(cnt)
+            cnt = 1
+            prev = v  # type: ignore[assignment]
+    rle_uncompressed["counts"].append(cnt)
+    return rle_uncompressed
 
 
 def clip_bounding_box_to_image(
@@ -21,7 +55,7 @@ def clip_bounding_box_to_image(
     image_height: int,
 ) -> tuple[dict[str, int], dict[str, int]]:
     """
-    境界ボックス（bbox）が画像からはみ出ていないかチェックし、はみ出ていれば修正します。
+    Annofab形式のバウンディングボックスが画像からはみ出ていないかチェックし、はみ出ていれば修正します。
 
     Args:
         left_top: 左上座標（Annofab形式）
@@ -41,6 +75,32 @@ def clip_bounding_box_to_image(
         "y": min(right_bottom["y"], image_height),
     }
     return new_left_top, new_right_bottom
+
+
+def clip_polygon_to_image(
+    points: list[dict[str, int]],
+    image_width: int,
+    image_height: int,
+) -> list[dict[str, int]]:
+    """
+    Annofab形式のポリゴン画像からはみ出ていないかチェックし、はみ出ていれば修正します。
+
+    Args:
+        points: ポリゴンの頂点座標（Annofab形式）
+        image_width: 画像の幅
+        image_height: 画像の高さ
+
+    Returns:
+        修正後のポリゴンの頂点座標
+    """
+    clipped_points = []
+    for point in points:
+        clipped_point = {
+            "x": max(min(point["x"], image_width), 0),
+            "y": max(min(point["y"], image_height), 0),
+        }
+        clipped_points.append(clipped_point)
+    return clipped_points
 
 
 def convert_af_input_data_to_coco_image(af_input_data: dict[str, Any], coco_image_id: int) -> dict[str, Any]:
@@ -71,8 +131,21 @@ def convert_af_input_data_list_to_coco_images(af_input_data_list: list[dict[str,
 
 
 class AnnotationConverterFromAnnofabToCoco:
+    """
+    Annofabのアノテーション情報をCOCO形式に変換するクラスです。
+
+    Notes:
+        compressed RLEに対応していない理由：`pycocotools.mask.encode`した結果はcompressed RLEです。しかし`counts`はbyte型なので、JSONに出力する際文字列にencodeする必要がります。
+        どのencodeするかが分からない（ascii? latin1？）のと、公式からダウンロードしたCOCOのアノテーションJSONはuncompressed RLEなので、uncompressed RLEに統一しています。
+    """
+
     def __init__(
-        self, coco_categories: list[dict[str, Any]], coco_images: list[dict[str, Any]], *, target_af_target_labels: Collection[str] | None = None, should_clip_annotation_to_image: bool = False
+        self,
+        coco_categories: list[dict[str, Any]],
+        coco_images: list[dict[str, Any]],
+        *,
+        target_af_target_labels: Collection[str] | None = None,
+        should_clip_annotation_to_image: bool = False,
     ) -> None:
         self.category_ids_by_name: dict[str, int] = {category["name"]: category["id"] for category in coco_categories}
         self.images_by_file_name: dict[str, dict[str, Any]] = {image["file_name"]: image for image in coco_images}
@@ -86,6 +159,7 @@ class AnnotationConverterFromAnnofabToCoco:
         """
         Bounding BoxのAnnofabのdetail情報をCOCO形式に変換します。
         """
+        assert af_detail["data"]["_type"] == "BoundingBox"
         annotation_id = af_detail["annotation_id"]
         label = af_detail["label"]
         left_top = af_detail["data"]["left_top"].copy()
@@ -128,12 +202,83 @@ class AnnotationConverterFromAnnofabToCoco:
             "iscrowd": 0,
         }
 
-    def convert_af_annotation(self, af_annotation: dict[str, Any], coco_image: dict[str, Any], coco_start_annotation_id: int) -> tuple[list[dict[str, Any]], int]:
+    def convert_af_polygon_detail(
+        self, af_detail: dict[str, Any], coco_image: dict[str, Any], coco_annotation_id: int, *, task_id: str | None = None, input_data_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        PolygonのAnnofabのdetail情報をCOCO形式に変換します。
+        """
+        assert af_detail["data"]["_type"] == "Points"
+        annotation_id = af_detail["annotation_id"]
+        label = af_detail["label"]
+        points = af_detail["data"]["points"].copy()
+        image_width = coco_image["width"]
+        image_height = coco_image["height"]
+        coco_image_id = coco_image["id"]
+
+        if self.should_clip_annotation_to_image:
+            # polygonが画像からはみ出ていないかチェックし、はみ出ていれば修正
+            original_points = points
+            new_points = clip_polygon_to_image(
+                original_points,
+                image_width,
+                image_height,
+            )
+            if new_points != original_points:
+                logger.debug(
+                    f"polygonが画像からはみ出ていたため修正しました。 :: "
+                    f"task_id='{task_id}', input_data_id='{input_data_id}', annotation_id='{annotation_id}', label='{label}', "
+                    f"coco_image_id='{coco_image_id}', coco_annotation_id='{coco_annotation_id}' :: "
+                    f"original_points={original_points}, new_points={new_points}"
+                )
+            points = new_points
+
+        segmentation = [[v for p in points for v in (p["x"], p["y"])]]
+        polygon = Polygon([(p["x"], p["y"]) for p in points])
+        min_x, min_y, max_x, max_y = polygon.bounds
+        bbox = [min_x, min_y, max_x - min_x, max_y - min_y]
+        return {
+            "id": coco_annotation_id,
+            "image_id": coco_image["id"],
+            "category_id": self.category_ids_by_name[label],
+            "bbox": bbox,
+            "segmentation": segmentation,
+            "area": polygon.area,
+            "iscrowd": 0,
+        }
+
+    def convert_af_segmentation_detail(self, af_detail: dict[str, Any], coco_image: dict[str, Any], coco_annotation_id: int, af_parser: SimpleAnnotationParser) -> dict[str, Any]:
+        """
+        Annofabの塗りつぶしアノテーションのdetail情報をCOCO形式（Uncompressed RLE）に変換します。
+        """
+        assert af_detail["data"]["_type"] == "Segmentation"
+        annotation_id = af_detail["annotation_id"]
+        label = af_detail["label"]
+
+        with af_parser.open_outer_file(annotation_id) as f:
+            boolean_segmentation_array = read_binary_image(f)
+
+        uncompressed_rle = get_rle_from_boolean_segmentation_array(boolean_segmentation_array)
+        compressed_rle = pycocotools.mask.frPyObjects(uncompressed_rle, coco_image["height"], coco_image["width"])
+
+        return {
+            "id": coco_annotation_id,
+            "image_id": coco_image["id"],
+            "category_id": self.category_ids_by_name[label],
+            "bbox": pycocotools.mask.toBbox(compressed_rle).tolist(),
+            "segmentation": uncompressed_rle,
+            "area": float(pycocotools.mask.area(compressed_rle)),
+            # COCOのフォーマットに従い、RLE形式のときはiscrowdは1にする
+            "iscrowd": 1,
+        }
+
+    def convert_af_annotation(self, af_annotation: dict[str, Any], af_parser: SimpleAnnotationParser, coco_image: dict[str, Any], coco_start_annotation_id: int) -> tuple[list[dict[str, Any]], int]:
         """
         Annofab形式の1個のJSONファイルに格納されているアノテーション情報を、COCO形式の複数個のアノテーションに変換します。
 
         Args:
             af_annotation: Annofab形式のアノテーション情報
+            af_parser: Annofab形式のアノテーションのパーサー。塗りつぶしアノテーションを読み込むのに利用する。
             coco_image: COCO形式のimage
             coco_start_annotation_id: COCO形式のannotation_idの開始番号
 
@@ -152,10 +297,15 @@ class AnnotationConverterFromAnnofabToCoco:
             if self.target_af_target_labels is not None and af_detail["label"] not in self.target_af_target_labels:
                 continue
 
-            if af_detail["data"]["_type"] == "BoundingBox":
-                coco_annotation = self.convert_af_bounding_box_detail(af_detail, coco_image, coco_annotation_id, task_id=task_id, input_data_id=input_data_id)
-            else:
-                continue
+            match af_detail["data"]["_type"]:
+                case "BoundingBox":
+                    coco_annotation = self.convert_af_bounding_box_detail(af_detail, coco_image, coco_annotation_id, task_id=task_id, input_data_id=input_data_id)
+                case "Points":
+                    coco_annotation = self.convert_af_polygon_detail(af_detail, coco_image, coco_annotation_id, task_id=task_id, input_data_id=input_data_id)
+                case "Segmentation":
+                    coco_annotation = self.convert_af_segmentation_detail(af_detail, coco_image, coco_annotation_id, af_parser)
+                case _:
+                    continue
 
             coco_annotations.append(coco_annotation)
             coco_annotation_id += 1
@@ -209,7 +359,7 @@ class AnnotationConverterFromAnnofabToCoco:
             try:
                 # Annofabのinput_data_nameをCOCOのfile_nameとして変換する
                 coco_image = self.images_by_file_name[af_annotation["input_data_name"]]
-                sub_coco_annotations, coco_start_annotation_id = self.convert_af_annotation(af_annotation, coco_image, coco_start_annotation_id)
+                sub_coco_annotations, coco_start_annotation_id = self.convert_af_annotation(af_annotation, af_parser, coco_image, coco_start_annotation_id)
                 logger.debug(f"AnnofabのアノテーションJSONファイル'{af_parser.json_file_path}'をCOCO形式のannotations（{len(sub_coco_annotations)}個）に変換しました。 ")
                 coco_annotations.extend(sub_coco_annotations)
                 success_count += 1

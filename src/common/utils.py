@@ -57,38 +57,6 @@ def configure_loguru(*, is_verbose: bool) -> None:
     logger.add(".log/annofab-coco-tools.log", rotation="1 day", diagnose=False, filter=level_per_module)  # type: ignore[arg-type]
 
 
-def read_lines(filepath: str) -> list[str]:
-    """ファイルを行単位で読み込む。改行コードを除く"""
-    with open(filepath, encoding="utf-8") as f:
-        lines = f.readlines()
-    return [e.rstrip("\r\n") for e in lines]
-
-
-def read_lines_except_blank_line(filepath: str) -> list[str]:
-    """ファイルを行単位で読み込む。ただし、改行コード、空行を除く"""
-    lines = read_lines(filepath)
-    return [line for line in lines if line != ""]
-
-
-def prompt_yesno(msg: str) -> bool:
-    """
-    標準入力で yes, noを選択できるようにする。
-    Args:
-        msg: 確認メッセージ
-
-    Returns:
-        True: Yes, False: No
-
-    """
-    while True:
-        choice = input(f"{msg} [y/N] : ")
-        if choice == "y":
-            return True
-
-        elif choice == "N":
-            return False
-
-
 def log_exception():  # noqa: ANN201
     """
     例外発生時に指定したメッセージをログに出力するデコレータ。
