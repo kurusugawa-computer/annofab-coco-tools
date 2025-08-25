@@ -1,0 +1,51 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the README at:
+// https://github.com/microsoft/vscode-dev-containers/tree/v0.154.0/containers/docker-existing-dockerfile
+{
+	"name": "${localWorkspaceFolderBasename}",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": ".",
+		"args": {}
+	},
+	"containerUser": "vscode",
+	"remoteUser": "vscode",
+	"updateRemoteUserUID": true,
+	// マウント対象のディレクトリを事前に作成する
+	"initializeCommand": "mkdir -p ${localWorkspaceFolder}/.devcontainer/venv",
+	"mounts": [
+		// ホスト側のvenvとコンテン側のvenvを分類して、ホスト側でuvコマンドを利用できるようにする
+		"source=${localWorkspaceFolder}/.devcontainer/venv,target=${containerWorkspaceFolder}/.venv,type=bind"
+	],
+	"forwardPorts": [],
+	"runArgs": [
+		"--init",
+		"--net=host",
+		"--env=ANNOFAB_USER_ID",
+		"--env=ANNOFAB_PASSWORD",
+		"--env=ANNOFAB_PAT"
+	],
+	"containerEnv": {
+		"CONTAINER_WORKSPACE": "${containerWorkspaceFolder}",
+		"LOCAL_WORKSPACE": "${localWorkspaceFolder}"
+	},
+	"workspaceMount": "source=${localWorkspaceFolder},target=/workspaces,type=bind,consistency=cached",
+	"workspaceFolder": "/workspaces",
+	"postStartCommand": "uv sync",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"mosapride.zenkaku",
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"charliermarsh.ruff",
+				"streetsidesoftware.code-spell-checker",
+				"tamasfe.even-better-toml",
+				"njpwerner.autodocstring",
+				"mechatroner.rainbow-csv",
+				"lextudio.restructuredtext",
+				"GitHub.copilot",
+				"GitHub.copilot-chat",
+			]	
+		}
+	}
+}
