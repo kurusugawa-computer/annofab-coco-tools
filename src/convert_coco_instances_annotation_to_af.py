@@ -402,6 +402,14 @@ def create_input_data_name_to_input_data_mapping(input_data_list: list[dict[str,
 def get_target_input_data_ids(coco_images: list[dict[str, Any]], input_data_name_to_input_data_id: dict[str, str] | None) -> set[str]:
     """
     COCOのimagesから、Annofab形式への変換で参照するinput_data_idの集合を取得します。
+
+    Args:
+        coco_images: COCO形式のimages情報。各要素の`file_name`を参照します。
+        input_data_name_to_input_data_id: keyがAnnofabの`input_data_name`、valueが`input_data_id`の辞書。
+            Noneの場合、COCOの`image.file_name`を`input_data_id`とみなします。
+
+    Returns:
+        変換対象のinput_data_idの集合。`input_data_name_to_input_data_id`に対応する値が存在しないCOCO imageは除外します。
     """
     result = set()
     for coco_image in coco_images:
