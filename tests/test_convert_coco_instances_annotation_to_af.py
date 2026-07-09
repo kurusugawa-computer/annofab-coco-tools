@@ -12,6 +12,7 @@ from src.convert_coco_instances_annotation_to_af import (
     convert_coco_one_segmentation_to_af_format,
     create_input_data_id_to_task_id_mapping,
     create_input_data_name_to_input_data_id_mapping,
+    get_target_input_data_ids,
 )
 
 
@@ -57,6 +58,29 @@ def test_create_input_data_id_to_task_id_mapping_error():
         create_input_data_id_to_task_id_mapping(task_list)
 
 
+def test_create_input_data_id_to_task_id_mapping_ignores_duplicated_non_target_input_data_id():
+    """変換対象外のinput_data_idが複数タスクに含まれていても無視することを検証"""
+    task_list = [
+        {"task_id": "task1", "input_data_id_list": ["data1", "data2"]},
+        {"task_id": "task2", "input_data_id_list": ["data2", "data3"]},  # data2が重複しているが対象外
+    ]
+
+    result = create_input_data_id_to_task_id_mapping(task_list, target_input_data_ids={"data1", "data3"})
+
+    assert result == {"data1": "task1", "data3": "task2"}
+
+
+def test_create_input_data_id_to_task_id_mapping_error_when_target_input_data_id_is_duplicated():
+    """変換対象のinput_data_idが複数タスクに含まれている場合はエラーにすることを検証"""
+    task_list = [
+        {"task_id": "task1", "input_data_id_list": ["data1", "data2"]},
+        {"task_id": "task2", "input_data_id_list": ["data2", "data3"]},
+    ]
+
+    with pytest.raises(ValueError):
+        create_input_data_id_to_task_id_mapping(task_list, target_input_data_ids={"data2"})
+
+
 def test_create_input_data_name_to_input_data_id_mapping():
     """create_input_data_name_to_input_data_id_mapping関数のテスト"""
     # テスト用のデータ
@@ -71,6 +95,16 @@ def test_create_input_data_name_to_input_data_id_mapping():
     # 結果の検証
     expected = {"name1": "id1", "name2": "id2"}
     assert result == expected
+
+
+def test_get_target_input_data_ids():
+    """COCOのimage.file_nameから変換対象のinput_data_idを取得することを検証"""
+    coco_images = [{"file_name": "image1.jpg"}, {"file_name": "image2.jpg"}, {"file_name": "missing.jpg"}]
+    input_data_name_to_input_data_id = {"image1.jpg": "data1", "image2.jpg": "data2"}
+
+    result = get_target_input_data_ids(coco_images, input_data_name_to_input_data_id)
+
+    assert result == {"data1", "data2"}
 
 
 def test_create_input_data_name_to_input_data_id_mapping_error():

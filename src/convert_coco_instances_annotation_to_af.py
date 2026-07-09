@@ -246,9 +246,13 @@ class AnnotationConverterFromCocoToAnnofab:
         )
 
 
-def create_input_data_id_to_task_id_mapping(task_list: list[dict[str, Any]]) -> dict[str, str]:
+def create_input_data_id_to_task_id_mapping(task_list: list[dict[str, Any]], *, target_input_data_ids: Collection[str] | None = None) -> dict[str, str]:
     """
     Annofabのタスク全件ファイルから、input_data_idとtask_idのマッピングを作成します。
+
+    Args:
+        task_list: Annofabのタスク全件情報
+        target_input_data_ids: マッピング作成対象のinput_data_id。Noneの場合はすべてのinput_data_idを対象にします。
 
     Returns:
         keyが`input_data_id`、valueが`task_id`の辞書
@@ -256,9 +260,13 @@ def create_input_data_id_to_task_id_mapping(task_list: list[dict[str, Any]]) -> 
     Raises:
         ValueError: 1個の入力データが複数のタスクから参照されている
     """
+    target_input_data_id_set = set(target_input_data_ids) if target_input_data_ids is not None else None
     result = {}
     for task in task_list:
         for input_data_id in task["input_data_id_list"]:
+            if target_input_data_id_set is not None and input_data_id not in target_input_data_id_set:
+                continue
+
             task_id = task["task_id"]
             if input_data_id in result:
                 raise ValueError(f"input_data_id='{input_data_id}'の入力データは複数のタスクに含まれています。入力データは1個のタスクのみ含まれるように変更してください。")
@@ -285,6 +293,20 @@ def create_input_data_name_to_input_data_id_mapping(input_data_list: list[dict[s
             raise ValueError(f"input_data_name='{input_data_name}'の入力データが複数存在します。input_data_nameが重複しないようにしてください。")
 
         result[input_data_name] = input_data_id
+    return result
+
+
+def get_target_input_data_ids(coco_images: list[dict[str, Any]], input_data_name_to_input_data_id: dict[str, str] | None) -> set[str]:
+    """
+    COCOのimagesから、Annofab形式への変換で参照するinput_data_idの集合を取得します。
+    """
+    result = set()
+    for coco_image in coco_images:
+        image_file_name = coco_image["file_name"]
+        af_input_data_id = input_data_name_to_input_data_id.get(image_file_name) if input_data_name_to_input_data_id is not None else image_file_name
+        if af_input_data_id is None:
+            continue
+        result.add(af_input_data_id)
     return result
 
 
@@ -345,11 +367,12 @@ def main() -> None:
 
     coco_instances = json.loads(args.coco_instances_json.read_text())
 
-    input_data_id_to_task_id = create_input_data_id_to_task_id_mapping(json.loads(args.af_task_json.read_text())) if args.af_task_json is not None else None
     input_data_name_to_input_data_id = create_input_data_name_to_input_data_id_mapping(json.loads(args.af_input_data_json.read_text())) if args.af_input_data_json is not None else None
     converter = AnnotationConverterFromCocoToAnnofab(
         coco_instances, CocoAnnotationType(args.coco_annotation_type), target_coco_category_names=args.coco_category_name, target_coco_image_file_names=args.coco_image_file_name
     )
+    target_input_data_ids = get_target_input_data_ids(converter.coco_images, input_data_name_to_input_data_id)
+    input_data_id_to_task_id = create_input_data_id_to_task_id_mapping(json.loads(args.af_task_json.read_text()), target_input_data_ids=target_input_data_ids) if args.af_task_json is not None else None
     converter.convert(args.output_dir, input_data_id_to_task_id=input_data_id_to_task_id, input_data_name_to_input_data_id=input_data_name_to_input_data_id)
 
 
