@@ -9,10 +9,14 @@ import pytest
 from src.convert_coco_instances_annotation_to_af import (
     AnnotationConverterFromCocoToAnnofab,
     CocoAnnotationType,
+    ResizeScale,
     convert_coco_one_segmentation_to_af_format,
     create_input_data_id_to_task_id_mapping,
     create_input_data_name_to_input_data_id_mapping,
+    create_input_data_name_to_input_data_mapping,
+    create_resize_scale_from_af_input_data,
     get_target_input_data_ids,
+    resize_boolean_array_by_nearest_neighbor,
 )
 
 
@@ -27,6 +31,45 @@ def test_convert_coco_one_segmentation_to_af_format():
     # 結果の検証
     expected = {"points": [{"x": 10, "y": 20}, {"x": 30, "y": 40}, {"x": 50, "y": 60}], "_type": "Points"}
     assert result == expected
+
+
+def test_convert_coco_one_segmentation_to_af_format_resized():
+    """ポリゴン座標をAnnofabのリサイズ後画像サイズに合わせて変換することを検証"""
+    polygon_segmentation = [10, 20, 30, 40, 50, 60]
+
+    result = convert_coco_one_segmentation_to_af_format(polygon_segmentation, ResizeScale(x=0.5, y=0.25, width=50, height=25))
+
+    expected = {"points": [{"x": 5, "y": 5}, {"x": 15, "y": 10}, {"x": 25, "y": 15}], "_type": "Points"}
+    assert result == expected
+
+
+def test_create_resize_scale_from_af_input_data():
+    """Annofab入力データ情報からリサイズ倍率を作成することを検証"""
+    af_input_data = {
+        "input_data_id": "0000000089",
+        "input_data_name": "image.png",
+        "system_metadata": {
+            "resized_resolution": {"width": 4096, "height": 4024},
+            "original_resolution": {"width": 8192, "height": 8048},
+        },
+    }
+
+    result = create_resize_scale_from_af_input_data(af_input_data)
+
+    assert result.x == 0.5
+    assert result.y == 0.5
+    assert result.width == 4096
+    assert result.height == 4024
+
+
+def test_resize_boolean_array_by_nearest_neighbor():
+    """bool配列を最近傍でリサイズすることを検証"""
+    boolean_array = numpy.array([[True, False, False, False], [False, True, True, False], [False, False, False, True]], dtype=bool)
+
+    result = resize_boolean_array_by_nearest_neighbor(boolean_array, width=2, height=2)
+
+    expected = numpy.array([[True, False], [False, True]], dtype=bool)
+    numpy.testing.assert_array_equal(result, expected)
 
 
 def test_create_input_data_id_to_task_id_mapping():
@@ -95,6 +138,18 @@ def test_create_input_data_name_to_input_data_id_mapping():
     # 結果の検証
     expected = {"name1": "id1", "name2": "id2"}
     assert result == expected
+
+
+def test_create_input_data_name_to_input_data_mapping():
+    """create_input_data_name_to_input_data_mapping関数のテスト"""
+    input_data_list = [
+        {"input_data_id": "id1", "input_data_name": "name1"},
+        {"input_data_id": "id2", "input_data_name": "name2"},
+    ]
+
+    result = create_input_data_name_to_input_data_mapping(input_data_list)
+
+    assert result == {"name1": input_data_list[0], "name2": input_data_list[1]}
 
 
 def test_get_target_input_data_ids():
@@ -176,6 +231,17 @@ class TestAnnotationConverterFromCocoToAnnofab:
         assert result["data"]["left_top"] == {"x": 200, "y": 200}
         assert result["data"]["right_bottom"] == {"x": 300, "y": 250}
 
+    def test_convert_bbox_annotation_to_af_detail_resized(self):
+        """BBoxアノテーションをAnnofabのリサイズ後画像サイズに合わせて変換することを検証"""
+        converter = AnnotationConverterFromCocoToAnnofab(self.coco_instances, CocoAnnotationType.BBOX)
+        coco_annotation = self.coco_instances["annotations"][0]  # person, bbox
+
+        result = converter.convert_bbox_annotation_to_af_detail(coco_annotation, ResizeScale(x=0.5, y=0.5, width=320, height=214))
+
+        assert result is not None
+        assert result["data"]["left_top"] == {"x": 100, "y": 100}
+        assert result["data"]["right_bottom"] == {"x": 150, "y": 125}
+
     def test_convert_bbox_annotation_to_af_detail_filtered(self):
         """BBoxアノテーション変換のフィルターテスト"""
         # 特定のカテゴリでフィルタリング
@@ -210,6 +276,15 @@ class TestAnnotationConverterFromCocoToAnnofab:
         assert polygon_detail["attributes"]["coco.image_id"] == 1
         assert polygon_detail["data"]["_type"] == "Points"
         assert len(polygon_detail["data"]["points"]) == 3
+
+    def test_convert_polygon_segmentation_annotation_to_af_detail_resized(self):
+        """ポリゴンアノテーションをAnnofabのリサイズ後画像サイズに合わせて変換することを検証"""
+        converter = AnnotationConverterFromCocoToAnnofab(self.coco_instances, CocoAnnotationType.POLYGON_SEGMENTATION)
+        coco_annotation = self.coco_instances["annotations"][0]  # person, polygon
+
+        result = converter.convert_polygon_segmentation_annotation_to_af_detail(coco_annotation, ResizeScale(x=0.5, y=0.5, width=320, height=214))
+
+        assert result[0]["data"]["points"] == [{"x": 100, "y": 100}, {"x": 150, "y": 100}, {"x": 150, "y": 125}]
 
     def test_convert_annotations_to_af_details_bbox(self):
         """convert_annotations_to_af_detailsメソッドのBBox変換テスト"""
@@ -281,6 +356,18 @@ class TestConvertRLESegmentation:
         assert isinstance(segmentation_bool_array, numpy.ndarray)
         assert segmentation_bool_array.shape == (427, 640)  # 画像サイズと同じ
         assert segmentation_bool_array.dtype == bool  # bool型であること
+
+    def test_convert_rle_segmentation_annotation_to_af_detail_resized(self):
+        """RLEセグメンテーションをAnnofabのリサイズ後画像サイズに合わせて変換することを検証"""
+        coco_annotation = self.coco_instances["annotations"][1]  # car, RLE
+        coco_image = self.coco_instances["images"][0]  # test_image1.jpg
+
+        af_detail, segmentation_bool_array = self.converter.convert_rle_segmentation_annotation_to_af_detail(coco_annotation, coco_image, ResizeScale(x=0.5, y=0.5, width=320, height=214))
+
+        assert af_detail is not None
+        assert segmentation_bool_array is not None
+        assert segmentation_bool_array.shape == (214, 320)
+        assert segmentation_bool_array.dtype == bool
 
     def test_convert_rle_segmentation_annotation_to_af_detail_not_rle(self):
         """RLEでないアノテーションに対するテスト (iscrowd=0)"""
