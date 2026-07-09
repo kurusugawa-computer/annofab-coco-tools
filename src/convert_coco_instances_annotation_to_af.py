@@ -3,6 +3,7 @@ import json
 import sys
 import uuid
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, assert_never
@@ -24,12 +25,69 @@ class CocoAnnotationType(Enum):
     RLE_SEGMENTATION = "rle_segmentation"
 
 
-def convert_coco_one_segmentation_to_af_format(polygon_segmentation: Sequence[float]) -> dict[str, Any]:
+@dataclass(frozen=True)
+class ResizeScale:
+    x: float
+    y: float
+    width: int
+    height: int
+
+    @property
+    def is_identity(self) -> bool:
+        return self.x == 1 and self.y == 1
+
+    def scale_x(self, value: float) -> int:
+        return round(value * self.x)
+
+    def scale_y(self, value: float) -> int:
+        return round(value * self.y)
+
+
+IDENTITY_RESIZE_SCALE = ResizeScale(x=1, y=1, width=0, height=0)
+
+
+def convert_coco_one_segmentation_to_af_format(polygon_segmentation: Sequence[float], resize_scale: ResizeScale = IDENTITY_RESIZE_SCALE) -> dict[str, Any]:
     """
     COCO形式の1個のアノテーションの`segmentation`をAnnofab形式のポリゴンに変換します。
     """
     # Annofabは座標値は整数で格納しているので、round()で整数に変換する。
-    return {"points": [{"x": round(polygon_segmentation[i]), "y": round(polygon_segmentation[i + 1])} for i in range(0, len(polygon_segmentation), 2)], "_type": "Points"}
+    return {"points": [{"x": resize_scale.scale_x(polygon_segmentation[i]), "y": resize_scale.scale_y(polygon_segmentation[i + 1])} for i in range(0, len(polygon_segmentation), 2)], "_type": "Points"}
+
+
+def create_resize_scale_from_af_input_data(af_input_data: dict[str, Any]) -> ResizeScale:
+    """
+    Annofab入力データ情報から、元画像サイズからAnnofab作業画像サイズへのリサイズ倍率を作成します。
+    """
+    system_metadata = af_input_data.get("system_metadata") or {}
+    original_resolution = system_metadata.get("original_resolution")
+    resized_resolution = system_metadata.get("resized_resolution")
+    if original_resolution is None or resized_resolution is None:
+        return IDENTITY_RESIZE_SCALE
+
+    original_width = original_resolution["width"]
+    original_height = original_resolution["height"]
+    resized_width = resized_resolution["width"]
+    resized_height = resized_resolution["height"]
+    if original_width <= 0 or original_height <= 0 or resized_width <= 0 or resized_height <= 0:
+        raise ValueError(
+            f"Annofab入力データの画像サイズが不正です。 :: "
+            f"input_data_id='{af_input_data.get('input_data_id')}', original_resolution={original_resolution}, resized_resolution={resized_resolution}"
+        )
+
+    return ResizeScale(x=resized_width / original_width, y=resized_height / original_height, width=resized_width, height=resized_height)
+
+
+def resize_boolean_array_by_nearest_neighbor(boolean_array: numpy.ndarray, width: int, height: int) -> numpy.ndarray:
+    """
+    bool配列を最近傍でリサイズします。
+    """
+    original_height, original_width = boolean_array.shape
+    if original_width == width and original_height == height:
+        return boolean_array
+
+    x_indices = numpy.minimum((numpy.arange(width) * original_width / width).astype(int), original_width - 1)
+    y_indices = numpy.minimum((numpy.arange(height) * original_height / height).astype(int), original_height - 1)
+    return boolean_array[y_indices[:, None], x_indices]
 
 
 class AnnotationConverterFromCocoToAnnofab:
@@ -56,7 +114,7 @@ class AnnotationConverterFromCocoToAnnofab:
 
         self.category_names_by_id: dict[int, str] = {category["id"]: category["name"] for category in coco_instances["categories"]}
 
-    def convert_bbox_annotation_to_af_detail(self, coco_annotation: dict[str, Any]) -> dict[str, Any] | None:
+    def convert_bbox_annotation_to_af_detail(self, coco_annotation: dict[str, Any], resize_scale: ResizeScale = IDENTITY_RESIZE_SCALE) -> dict[str, Any] | None:
         """
         COCO形式の1個のアノテーションの`bbox`をAnnofab形式の矩形アノテーションに変換します。
 
@@ -73,10 +131,14 @@ class AnnotationConverterFromCocoToAnnofab:
         }
         left_top_x, left_top_y, width, height = coco_annotation["bbox"]
         # Annofabは座標値は整数で格納しているので、round()で整数に変換する。
-        data = {"left_top": {"x": round(left_top_x), "y": round(left_top_y)}, "right_bottom": {"x": round(left_top_x + width), "y": round(left_top_y + height)}, "_type": "BoundingBox"}
+        data = {
+            "left_top": {"x": resize_scale.scale_x(left_top_x), "y": resize_scale.scale_y(left_top_y)},
+            "right_bottom": {"x": resize_scale.scale_x(left_top_x + width), "y": resize_scale.scale_y(left_top_y + height)},
+            "_type": "BoundingBox",
+        }
         return {"annotation_id": str(uuid.uuid4()), "label": coco_category_name, "attributes": attributes, "data": data}
 
-    def convert_polygon_segmentation_annotation_to_af_detail(self, coco_annotation: dict[str, Any]) -> list[dict[str, Any]]:
+    def convert_polygon_segmentation_annotation_to_af_detail(self, coco_annotation: dict[str, Any], resize_scale: ResizeScale = IDENTITY_RESIZE_SCALE) -> list[dict[str, Any]]:
         """
         COCO形式の1個のアノテーションの`segmentation`（iscrowd=0のポリゴン）をAnnofab形式のポリゴンに変換します。
         COCOの`segmentation`は複数に分割されている場合があるので、listを返します。
@@ -99,12 +161,14 @@ class AnnotationConverterFromCocoToAnnofab:
                 "label": coco_category_name,
                 "annotation_id": str(uuid.uuid4()),
                 "attributes": attributes,
-                "data": convert_coco_one_segmentation_to_af_format(polygon),
+                "data": convert_coco_one_segmentation_to_af_format(polygon, resize_scale),
             }
             for polygon in segmentation
         ]
 
-    def convert_rle_segmentation_annotation_to_af_detail(self, coco_annotation: dict[str, Any], coco_image: dict[str, Any]) -> tuple[dict[str, Any] | None, numpy.ndarray | None]:
+    def convert_rle_segmentation_annotation_to_af_detail(
+        self, coco_annotation: dict[str, Any], coco_image: dict[str, Any], resize_scale: ResizeScale = IDENTITY_RESIZE_SCALE
+    ) -> tuple[dict[str, Any] | None, numpy.ndarray | None]:
         """
         COCO形式のRLE形式の`segmentation`（iscrowd=1）をAnnofabの塗りつぶしv1アノテーションに変換します。
 
@@ -133,11 +197,13 @@ class AnnotationConverterFromCocoToAnnofab:
             rle = segmentation
 
         segmentation_bool_array = pycocotools.mask.decode(rle).astype(bool)
+        if not resize_scale.is_identity:
+            segmentation_bool_array = resize_boolean_array_by_nearest_neighbor(segmentation_bool_array, resize_scale.width, resize_scale.height)
         annotation_id = str(uuid.uuid4())
         af_detail = {"label": coco_category_name, "annotation_id": annotation_id, "attributes": attributes, "data": {"data_uri": annotation_id, "_type": "Segmentation"}}
         return af_detail, segmentation_bool_array
 
-    def convert_annotations_to_af_details(self, coco_image: dict[str, Any], af_input_data_dir: Path) -> tuple[list[dict[str, Any]], int]:
+    def convert_annotations_to_af_details(self, coco_image: dict[str, Any], af_input_data_dir: Path, resize_scale: ResizeScale = IDENTITY_RESIZE_SCALE) -> tuple[list[dict[str, Any]], int]:
         """
         COCO形式の`images -> file_name`に対応するアノテーションをAnnofab形式の`details`に変換します。
 
@@ -154,7 +220,7 @@ class AnnotationConverterFromCocoToAnnofab:
         match self.coco_annotation_type:
             case CocoAnnotationType.BBOX:
                 for anno in coco_annotations:
-                    af_detail = self.convert_bbox_annotation_to_af_detail(anno)
+                    af_detail = self.convert_bbox_annotation_to_af_detail(anno, resize_scale)
                     if af_detail is not None:
                         af_details.append(af_detail)
                 return af_details, len(af_details)
@@ -162,7 +228,7 @@ class AnnotationConverterFromCocoToAnnofab:
             case CocoAnnotationType.POLYGON_SEGMENTATION:
                 target_coco_annotation_count = 0
                 for anno in coco_annotations:
-                    sub_details = self.convert_polygon_segmentation_annotation_to_af_detail(anno)
+                    sub_details = self.convert_polygon_segmentation_annotation_to_af_detail(anno, resize_scale)
                     if len(sub_details) > 0:
                         target_coco_annotation_count += 1
                     af_details.extend(sub_details)
@@ -171,7 +237,7 @@ class AnnotationConverterFromCocoToAnnofab:
 
             case CocoAnnotationType.RLE_SEGMENTATION:
                 for anno in coco_annotations:
-                    af_detail, segmentation_bool_array = self.convert_rle_segmentation_annotation_to_af_detail(anno, coco_image)
+                    af_detail, segmentation_bool_array = self.convert_rle_segmentation_annotation_to_af_detail(anno, coco_image, resize_scale)
                     if af_detail is None:
                         continue
 
@@ -184,7 +250,13 @@ class AnnotationConverterFromCocoToAnnofab:
             case _ as unreachable:
                 assert_never(unreachable)
 
-    def convert(self, output_dir: Path, input_data_id_to_task_id: dict[str, str] | None, input_data_name_to_input_data_id: dict[str, str] | None) -> None:
+    def convert(
+        self,
+        output_dir: Path,
+        input_data_id_to_task_id: dict[str, str] | None,
+        input_data_name_to_input_data_id: dict[str, str] | None,
+        input_data_name_to_input_data: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         """
         COCO形式のアノテーション全体をAnnofab形式に変換します。
 
@@ -215,9 +287,26 @@ class AnnotationConverterFromCocoToAnnofab:
                 logger.warning(f"Annofabのinput_data_id='{af_input_data_id}'に対応するtask_idが見つかりません。スキップします。")
                 continue
 
+            resize_scale = IDENTITY_RESIZE_SCALE
+            if input_data_name_to_input_data is not None:
+                af_input_data = input_data_name_to_input_data.get(image_file_name)
+                if af_input_data is None:
+                    logger.warning(f"Annofabのinput_data_name='{image_file_name}'に対応する入力データ情報が見つかりません。スキップします。")
+                    continue
+
+                resize_scale = create_resize_scale_from_af_input_data(af_input_data)
+                if not resize_scale.is_identity:
+                    logger.debug(
+                        f"Annofabのリサイズ後画像サイズに合わせてアノテーションを縮小します。 :: "
+                        f"input_data_id='{af_input_data_id}', input_data_name='{image_file_name}', scale_x={resize_scale.x}, scale_y={resize_scale.y}, "
+                        f"resized_width={resize_scale.width}, resized_height={resize_scale.height}"
+                    )
+
             af_annotation_json = output_dir / af_task_id / f"{af_input_data_id}.json"
             try:
-                af_details, target_coco_annotation_count = self.convert_annotations_to_af_details(coco_image, af_input_data_dir=output_dir / af_task_id / af_input_data_id)
+                af_details, target_coco_annotation_count = self.convert_annotations_to_af_details(
+                    coco_image, af_input_data_dir=output_dir / af_task_id / af_input_data_id, resize_scale=resize_scale
+                )
                 if target_coco_annotation_count == 0:
                     skipped_image_count += 1
                     logger.debug(f"COCOのimage.file_name='{image_file_name}'に紐づく変換対象のアノテーションは存在しません。")
@@ -246,9 +335,13 @@ class AnnotationConverterFromCocoToAnnofab:
         )
 
 
-def create_input_data_id_to_task_id_mapping(task_list: list[dict[str, Any]]) -> dict[str, str]:
+def create_input_data_id_to_task_id_mapping(task_list: list[dict[str, Any]], *, target_input_data_ids: Collection[str] | None = None) -> dict[str, str]:
     """
     Annofabのタスク全件ファイルから、input_data_idとtask_idのマッピングを作成します。
+
+    Args:
+        task_list: Annofabのタスク全件情報
+        target_input_data_ids: マッピング作成対象のinput_data_id。Noneの場合はすべてのinput_data_idを対象にします。
 
     Returns:
         keyが`input_data_id`、valueが`task_id`の辞書
@@ -256,9 +349,13 @@ def create_input_data_id_to_task_id_mapping(task_list: list[dict[str, Any]]) -> 
     Raises:
         ValueError: 1個の入力データが複数のタスクから参照されている
     """
+    target_input_data_id_set = set(target_input_data_ids) if target_input_data_ids is not None else None
     result = {}
     for task in task_list:
         for input_data_id in task["input_data_id_list"]:
+            if target_input_data_id_set is not None and input_data_id not in target_input_data_id_set:
+                continue
+
             task_id = task["task_id"]
             if input_data_id in result:
                 raise ValueError(f"input_data_id='{input_data_id}'の入力データは複数のタスクに含まれています。入力データは1個のタスクのみ含まれるように変更してください。")
@@ -285,6 +382,42 @@ def create_input_data_name_to_input_data_id_mapping(input_data_list: list[dict[s
             raise ValueError(f"input_data_name='{input_data_name}'の入力データが複数存在します。input_data_nameが重複しないようにしてください。")
 
         result[input_data_name] = input_data_id
+    return result
+
+
+def create_input_data_name_to_input_data_mapping(input_data_list: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """
+    Annofabの入力データ全件ファイルから、input_data_nameから入力データ情報のマッピングを作成します。
+    """
+    result = {}
+    for item in input_data_list:
+        input_data_name = item["input_data_name"]
+        if input_data_name in result:
+            raise ValueError(f"input_data_name='{input_data_name}'の入力データが複数存在します。input_data_nameが重複しないようにしてください。")
+
+        result[input_data_name] = item
+    return result
+
+
+def get_target_input_data_ids(coco_images: list[dict[str, Any]], input_data_name_to_input_data_id: dict[str, str] | None) -> set[str]:
+    """
+    COCOのimagesから、Annofab形式への変換で参照するinput_data_idの集合を取得します。
+
+    Args:
+        coco_images: COCO形式のimages情報。各要素の`file_name`を参照します。
+        input_data_name_to_input_data_id: keyがAnnofabの`input_data_name`、valueが`input_data_id`の辞書。
+            Noneの場合、COCOの`image.file_name`を`input_data_id`とみなします。
+
+    Returns:
+        変換対象のinput_data_idの集合。`input_data_name_to_input_data_id`に対応する値が存在しないCOCO imageは除外します。
+    """
+    result = set()
+    for coco_image in coco_images:
+        image_file_name = coco_image["file_name"]
+        af_input_data_id = input_data_name_to_input_data_id.get(image_file_name) if input_data_name_to_input_data_id is not None else image_file_name
+        if af_input_data_id is None:
+            continue
+        result.add(af_input_data_id)
     return result
 
 
@@ -345,12 +478,22 @@ def main() -> None:
 
     coco_instances = json.loads(args.coco_instances_json.read_text())
 
-    input_data_id_to_task_id = create_input_data_id_to_task_id_mapping(json.loads(args.af_task_json.read_text())) if args.af_task_json is not None else None
-    input_data_name_to_input_data_id = create_input_data_name_to_input_data_id_mapping(json.loads(args.af_input_data_json.read_text())) if args.af_input_data_json is not None else None
+    af_input_data_list = json.loads(args.af_input_data_json.read_text()) if args.af_input_data_json is not None else None
+    input_data_name_to_input_data_id = create_input_data_name_to_input_data_id_mapping(af_input_data_list) if af_input_data_list is not None else None
+    input_data_name_to_input_data = create_input_data_name_to_input_data_mapping(af_input_data_list) if af_input_data_list is not None else None
     converter = AnnotationConverterFromCocoToAnnofab(
         coco_instances, CocoAnnotationType(args.coco_annotation_type), target_coco_category_names=args.coco_category_name, target_coco_image_file_names=args.coco_image_file_name
     )
-    converter.convert(args.output_dir, input_data_id_to_task_id=input_data_id_to_task_id, input_data_name_to_input_data_id=input_data_name_to_input_data_id)
+    target_input_data_ids = get_target_input_data_ids(converter.coco_images, input_data_name_to_input_data_id)
+    input_data_id_to_task_id = (
+        create_input_data_id_to_task_id_mapping(json.loads(args.af_task_json.read_text()), target_input_data_ids=target_input_data_ids) if args.af_task_json is not None else None
+    )
+    converter.convert(
+        args.output_dir,
+        input_data_id_to_task_id=input_data_id_to_task_id,
+        input_data_name_to_input_data_id=input_data_name_to_input_data_id,
+        input_data_name_to_input_data=input_data_name_to_input_data,
+    )
 
 
 if __name__ == "__main__":
